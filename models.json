@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "updated": "2026-10-08",
+  "about": "Speech models and engine programs pocket-asr and the Pocket desktop agent can install. Every file is checked against its size and SHA-256 before use. `sha256Source`: github-release-digest = the SHA-256 GitHub publishes for the release asset; huggingface-lfs = the LFS object id (SHA-256) Hugging Face publishes; computed = downloaded once over HTTPS and hashed (upstream publishes no checksum). Mirrors are tried first, then the upstream URL; the official mirror is filled when the gateway is released (GitHub is unreachable from mainland China).",
+  "mirrors": ["https://pocket.pocketcli.net/dl/asr/"],
+  "engines": {
+    "sherpa-onnx": {
+      "version": "1.13.8",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/k2-fsa/sherpa-onnx",
+      "howto": "prebuilt for macOS arm64/x64, Windows x64 and Linux x64/arm64",
+      "binaries": {
+        "darwin-arm64": { "file": "sherpa-onnx-v1.13.8-osx-arm64-shared.tar.bz2", "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared.tar.bz2", "size": 20314448, "sha256": "b10e5c7e2c30ea03de9c442655d14860d9edc475c6251d58a8f5f06e913a1d56", "sha256Source": "github-release-digest", "bin": "bin/sherpa-onnx-offline", "libDir": "lib", "tested": "2026-10-08 on macOS 26 arm64 with paraformer-zh-small" },
+        "darwin-x64": { "file": "sherpa-onnx-v1.13.8-osx-x64-shared.tar.bz2", "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-x64-shared.tar.bz2", "size": 22846038, "sha256": "54aad64acee9d2d596535a6080d6f22602a720af5460e1d50461b1e1b06bee40", "sha256Source": "github-release-digest", "bin": "bin/sherpa-onnx-offline", "libDir": "lib" },
+        "win32-x64": { "file": "sherpa-onnx-v1.13.8-win-x64-shared-MT-Release.tar.bz2", "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release.tar.bz2", "size": 24805859, "sha256": "6dffdc715a4465b989446a6105265d2cb345e7101591a17d35534b6758f6e8df", "sha256Source": "github-release-digest", "bin": "bin/sherpa-onnx-offline.exe", "libDir": "bin", "note": "onnxruntime.dll sits next to the exe in bin/; not yet run on Windows" },
+        "linux-x64": { "file": "sherpa-onnx-v1.13.8-linux-x64-shared.tar.bz2", "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-linux-x64-shared.tar.bz2", "size": 28156791, "sha256": "c0bdb7907d3a74bba1d55d22bf4d9fa75586cf1530614ebe88a27b9118e015c4", "sha256Source": "github-release-digest", "bin": "bin/sherpa-onnx-offline", "libDir": "lib" },
+        "linux-arm64": { "file": "sherpa-onnx-v1.13.8-linux-aarch64-shared-cpu.tar.bz2", "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-linux-aarch64-shared-cpu.tar.bz2", "size": 28091778, "sha256": "4e3734f82bc1379fd91f219f5869c7e9d03b7a4f7561907d8abca4849c51a789", "sha256Source": "github-release-digest", "bin": "bin/sherpa-onnx-offline", "libDir": "lib" }
+      }
+    },
+    "whisper.cpp": {
+      "version": "1.9.5 (build b5454)",
+      "license": "MIT",
+      "homepage": "https://github.com/ggml-org/whisper.cpp",
+      "howto": "macOS has no prebuilt command-line program: build whisper.cpp from source or install it with Homebrew (`brew install whisper-cpp` provides whisper-cli)",
+      "binaries": {
+        "win32-x64": { "file": "whisper-bin-x64.zip", "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip", "size": 8928640, "sha256": "6ba69e3482d7826214f90a6a9c84ca07782aec1e1d0c6a7c30c994fd5d816ccb", "sha256Source": "github-release-digest", "bin": "whisper-cli.exe", "libDir": ".", "note": "the archive's top-level folder is Release/" },
+        "linux-x64": { "file": "whisper-bin-ubuntu-x64.tar.gz", "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-ubuntu-x64.tar.gz", "size": 10364195, "sha256": "a72becf15d7917f990f6313867a52638b82b7f9ef237fb0c980dac56a135781c", "sha256Source": "github-release-digest", "bin": "whisper-cli", "libDir": ".", "note": "shared libraries next to the program: run with LD_LIBRARY_PATH set to that directory" },
+        "linux-arm64": { "file": "whisper-bin-ubuntu-arm64.tar.gz", "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-ubuntu-arm64.tar.gz", "size": 4608377, "sha256": "6b95ebfc60447df48e70ef00a73bdc3f41679ed2d01ef465827206a2ff325149", "sha256Source": "github-release-digest", "bin": "whisper-cli", "libDir": "." }
+      }
+    },
+    "vosk": {
+      "license": "Apache-2.0",
+      "homepage": "https://alphacephei.com/vosk/",
+      "howto": "no single-file program: `pip install vosk` gives vosk-transcriber (it decodes audio with ffmpeg), or use scripts/vosk-wav.py from this repository (needs only `pip install vosk`)",
+      "binaries": {}
+    }
+  },
+  "models": {
+    "sense-voice-int8": {
+      "engine": "sherpa-onnx", "kind": "sense-voice", "langs": ["zh", "en", "auto"], "recommended": true,
+      "title": "SenseVoice small, int8 (zh / en / ja / ko / yue)", "license": "FunASR model license (see the archive's README)",
+      "file": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2",
+      "size": 165783878, "sha256": "7305f7905bfcf77fa0b39388a313f3da35c68d971661a65475b56fb2162c8e63", "sha256Source": "github-release-digest",
+      "archive": true, "files": ["model.int8.onnx", "tokens.txt"]
+    },
+    "paraformer-zh-small": {
+      "engine": "sherpa-onnx", "kind": "paraformer", "langs": ["zh"],
+      "title": "Paraformer small, int8 (Mandarin, handles English words; no punctuation)", "license": "FunASR model license (see the archive's README)",
+      "file": "sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2",
+      "size": 77920048, "sha256": "da92b3db5218c5be53aad53e57d1b6e63e7fc98a0e054fbdd6dbe18e9c6b1450", "sha256Source": "computed",
+      "archive": true, "files": ["model.int8.onnx", "tokens.txt"]
+    },
+    "whisper-base-q5_1": {
+      "engine": "whisper.cpp", "langs": ["zh", "en", "auto"],
+      "title": "Whisper base, 5-bit quantised (multilingual)", "license": "MIT",
+      "file": "ggml-base-q5_1.bin", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
+      "size": 59707625, "sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898", "sha256Source": "huggingface-lfs", "archive": false
+    },
+    "whisper-base": {
+      "engine": "whisper.cpp", "langs": ["zh", "en", "auto"],
+      "title": "Whisper base (multilingual)", "license": "MIT",
+      "file": "ggml-base.bin", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+      "size": 147951465, "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe", "sha256Source": "huggingface-lfs", "archive": false
+    },
+    "whisper-small": {
+      "engine": "whisper.cpp", "langs": ["zh", "en", "auto"],
+      "title": "Whisper small (multilingual, better, slower on CPU)", "license": "MIT",
+      "file": "ggml-small.bin", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+      "size": 487601967, "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b", "sha256Source": "huggingface-lfs", "archive": false
+    },
+    "vosk-small-cn": {
+      "engine": "vosk", "langs": ["zh"],
+      "title": "Vosk small Chinese 0.22", "license": "Apache-2.0",
+      "file": "vosk-model-small-cn-0.22.zip", "url": "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip",
+      "size": 43898754, "sha256": "3af8b0e7e0f835ae9d414ce5df580237a3cfb08d586c9fbbb0f7ff29ad5b14ba", "sha256Source": "computed", "archive": true
+    },
+    "vosk-small-en-us": {
+      "engine": "vosk", "langs": ["en"],
+      "title": "Vosk small US English 0.15", "license": "Apache-2.0",
+      "file": "vosk-model-small-en-us-0.15.zip", "url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+      "size": 41205931, "sha256": "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498", "sha256Source": "computed", "archive": true
+    }
+  }
+}

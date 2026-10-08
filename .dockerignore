@@ -1,0 +1,6 @@
+test/
+*.log
+asr.json
+data/
+models/
+.git

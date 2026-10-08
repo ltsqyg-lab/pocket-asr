@@ -1,0 +1,27 @@
+{
+  "gatewayId": "my-asr",
+  "listen": { "host": "0.0.0.0", "port": 8080 },
+  "tls": null,
+  "dataDir": "/var/lib/pocket-asr",
+
+  "auth": {
+    "tokens": [
+      { "label": "my phone", "sha256": "<run: node src/cli.mjs token \"my phone\" — paste the sha256 here, the token into the App>" }
+    ],
+    "ticket": {
+      "enabled": false,
+      "coordUrl": "https://pocket.pocketcli.net",
+      "pinnedKeys": [ { "kid": "c1", "pub": "<the coordination public key published in the README>", "use": ["keys", "ticket", "revocations"], "nbf": 0, "exp": 0 } ],
+      "accounts": ["<your Pocket account id>"]
+    }
+  },
+
+  "engines": [
+    { "id": "local", "type": "sherpa-onnx", "bin": "/opt/sherpa/bin/sherpa-onnx-offline", "model": "/models/sense-voice-int8", "threads": 2,
+      "install": { "model": "sense-voice-int8" } },
+    { "id": "openai", "type": "openai", "apiKey": "env:OPENAI_API_KEY", "model": "gpt-4o-transcribe" }
+  ],
+  "default": { "zh": "local", "en": "local", "auto": "local" },
+
+  "limits": { "maxBytes": 8388608, "maxSeconds": 240, "perMinute": 12, "concurrentPerCaller": 2, "concurrent": 4 }
+}
