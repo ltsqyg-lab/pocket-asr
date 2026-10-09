@@ -10,6 +10,7 @@ import { Limiter } from '../src/limits.mjs'
 import { hashToken } from '../src/auth.mjs'
 import { buildEngines, pickEngine } from '../src/engines/index.mjs'
 import { baseConfig, tmpDir, coordKeys, fakeAdapter } from './helpers.mjs'
+import { createGateway } from '../src/server.mjs'
 
 test('env: and file: values are resolved at startup; missing ones stop the start', () => {
   const dir = tmpDir()
@@ -38,7 +39,9 @@ test('validation: gateway id, auth, token entries, ticket keys, defaults, limits
   assert.deepEqual(ok.limits, DEFAULT_LIMITS)
   assert.equal(ok.listen.host, '127.0.0.1')
   assert.throws(() => loadConfig(baseConfig({ gatewayId: 'Bad Id' })), /gatewayId/)
-  assert.throws(() => loadConfig(baseConfig({ auth: {} })), /authenticate/)
+  // no way to authenticate is the gateway's call (tokens may also be kept in the data directory)
+  assert.ok(loadConfig(baseConfig({ auth: {} })))
+  assert.throws(() => createGateway(baseConfig({ auth: {} }), { adapters: { fake: fakeAdapter() } }), /authenticate/)
   assert.throws(() => loadConfig(baseConfig({ auth: { tokens: [{ label: '', sha256: hashToken('x') }] } })), /label/)
   assert.throws(() => loadConfig(baseConfig({ auth: { tokens: [{ label: 'a', sha256: hashToken('x') }, { label: 'a', sha256: hashToken('y') }] } })), /duplicate/)
   assert.throws(() => loadConfig(baseConfig({ auth: { ticket: { enabled: true, pinnedKeys: [{ kid: 'c1', pub: 'AAAA', use: ['ticket'], nbf: 0, exp: 1 }] } } })), /malformed/)
@@ -52,6 +55,28 @@ test('validation: gateway id, auth, token entries, ticket keys, defaults, limits
   assert.throws(() => loadConfig(baseConfig({ listen: { port: 70000 } })), /port/)
   assert.throws(() => loadConfig(baseConfig({ tls: { cert: 'a' } })), /tls/)
   assert.throws(() => loadConfig(baseConfig({ basePath: 'asr' })), /basePath/)
+})
+
+test('defaults without a file (ASR.md §11): port 8444 on every address, tls auto, a gateway id, coordination URL', () => {
+  const c = loadConfig({ auth: { tokens: [{ label: 'a', sha256: hashToken('x') }] }, engines: [] })
+  assert.deepEqual(c.listen, { host: null, port: 8444 })
+  assert.equal(c.tls, 'auto')
+  assert.equal(c.gatewayId, 'my-asr')
+  assert.equal(c.publicUrl, null)
+  assert.equal(c.coordUrl, 'https://pocket.pocketcli.net')
+  assert.equal(loadConfig(c), c, 'a loaded config is not loaded twice')
+  for (const tls of ['auto', 'self', 'off', null, { cert: 'c.pem', key: 'k.pem' }]) assert.deepEqual(loadConfig(baseConfig({ tls })).tls, tls)
+  assert.throws(() => loadConfig(baseConfig({ tls: 'on' })), /tls must be/)
+  assert.throws(() => loadConfig(baseConfig({ tls: true })), /tls must be/)
+  assert.equal(loadConfig(baseConfig({ publicUrl: 'https://203.0.113.7:8444/' })).publicUrl, 'https://203.0.113.7:8444')
+  assert.equal(loadConfig(baseConfig({ publicUrl: 'https://[2001:db8::1]:9000/asr' })).publicUrl, 'https://[2001:db8::1]:9000/asr')
+  for (const bad of ['http://203.0.113.7:8444', 'https://u:p@h.example', 'https://h.example/?x=1', 'not a url']) {
+    assert.throws(() => loadConfig(baseConfig({ publicUrl: bad })), /publicUrl/, bad)
+  }
+  assert.throws(() => loadConfig(baseConfig({ coordUrl: 'ftp://x' })), /coordUrl/)
+  assert.throws(() => loadConfig(baseConfig({ listen: { host: '', port: 1 } })), /listen.host/)
+  const k = coordKeys()
+  assert.throws(() => loadConfig({ auth: { ticket: { enabled: true, pinnedKeys: [k.entry] } } }), /needs a "gatewayId"/, 'tickets are addressed to a gateway id: no default then')
 })
 
 test('engine registry: ids, unknown types, maxSeconds capped by adapter and gateway, language picking', () => {

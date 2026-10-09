@@ -7,17 +7,19 @@
 //   GET  /healthz
 //
 // Audio and text live in memory for one request; logs carry no audio, text, tokens, tickets or proofs.
+// The command line (start, new-token, connect-string, …) is src/main.mjs; `node src/server.mjs --config x` still works.
 // License: AGPL-3.0-only.
 
 import http from 'node:http'
 import https from 'node:https'
-import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { loadConfig } from './config.mjs'
 import { buildEngines, pickEngine, LANGS } from './engines/index.mjs'
 import { Auth } from './auth.mjs'
+import { TokenStore } from './tokens.mjs'
+import { prepareTls } from './tls.mjs'
 import { Limiter } from './limits.mjs'
 import { parseWav, pcmToWav, peakAbs } from './wav.mjs'
 import { AsrError, cleanDetail } from './errors.mjs'
@@ -25,7 +27,7 @@ import { tidyText, charCount } from './text.mjs'
 import { isAbort } from './lib/http.mjs'
 import { PocketError } from './pcrypto.mjs'
 
-export const VERSION = '1.0.0'
+export const VERSION = '1.1.0'
 const MAX_REVOCATION_DOC = 1024 * 1024
 // Revocation documents are signed, but checking one costs a JSON parse of up to 1 MiB plus a signature check: cap the
 // rate (whole gateway) so a public /v1/revocations cannot be used to burn CPU. Coordination pushes a few per minute.
@@ -36,8 +38,11 @@ class ClientGone extends Error { constructor() { super('client went away'); this
 const logSafe = (s) => String(s).replace(/[\s=\u0000-\u001f\u007f"]/g, '_').slice(0, 80)
 
 /**
- * @param {object} rawConfig  parsed config object (or a path)
- * @param {{ log?: Function, now?: Function, fetch?: Function, adapters?: object, env?: object }} [opts]
+ * @param {object} rawConfig  parsed config object (or a path, or loadConfig()'s result)
+ * @param {{ log?: Function, now?: Function, fetch?: Function, adapters?: object, env?: object,
+ *           tls?: object, publicHost?: string, allowNoAuth?: boolean, tokenReloadMs?: number }} [opts]
+ *   tls: prepareTls()'s result (else listen() prepares it); publicHost: the name for a new self-signed certificate;
+ *   allowNoAuth: start even though no way to authenticate exists yet (main.mjs makes the first token right after listen)
  */
 export function createGateway(rawConfig, opts = {}) {
   const config = loadConfig(rawConfig, opts.env)
@@ -48,9 +53,16 @@ export function createGateway(rawConfig, opts = {}) {
   for (const [lang, id] of Object.entries(config.default)) {
     if (!engines.get(id).langs.includes(lang)) throw new Error(`config: default.${lang} = "${id}" but that engine doesn't do ${lang}`)
   }
+  // tokens made by `node src/main.mjs new-token` live in <dataDir>/tokens.json and are picked up without a restart
+  const tokenStore = config.dataDir
+    ? new TokenStore(config.dataDir, { now, minGapMs: opts.tokenReloadMs ?? 1000, log: (m) => log(`${stamp()} ${m}`) })
+    : null
   const auth = new Auth(config.auth, {
-    gatewayId: config.gatewayId, dataDir: config.dataDir, now, fetch: opts.fetch, log: (m) => log(`${stamp()} auth ${m}`),
+    gatewayId: config.gatewayId, dataDir: config.dataDir, now, fetch: opts.fetch, log: (m) => log(`${stamp()} auth ${m}`), tokenStore,
   })
+  if (!opts.allowNoAuth && !auth.methods.length) {
+    throw new Error('config: enable at least one way to authenticate: auth.tokens, a token from `node src/main.mjs new-token` (kept in dataDir), or auth.ticket')
+  }
   const limiter = new Limiter(config.limits, now)
   const limits = config.limits
   let uploads = 0
@@ -250,16 +262,20 @@ export function createGateway(rawConfig, opts = {}) {
   }
 
   let server = null
+  let tls = opts.tls || null
   const sweeper = setInterval(() => { limiter.sweep(); auth.sweep() }, 60_000)
   sweeper.unref?.()
 
   return {
-    config, engines, auth, limiter, handler, info,
+    config, engines, auth, limiter, handler, info, tokenStore,
+    /** How it serves: { mode: off|files|self, pin, selfIssued, … } (after listen(), or when given in opts.tls). */
+    get tls() { return tls },
     /** Start listening; resolves with the bound address. */
-    listen(port = config.listen.port, host = config.listen.host) {
-      server = config.tls
-        ? https.createServer({ cert: fs.readFileSync(config.tls.cert), key: fs.readFileSync(config.tls.key) }, handler)
-        : http.createServer(handler)
+    listen(port = config.listen.port, host = config.listen.host ?? undefined) {
+      tls ||= prepareTls(config, { publicHost: opts.publicHost, log: (m) => log(`${stamp()} ${m}`) })
+      server = tls.mode === 'off'
+        ? http.createServer(handler)
+        : https.createServer({ cert: tls.cert, key: tls.key }, handler)
       server.headersTimeout = 30_000
       server.requestTimeout = 300_000
       server.keepAliveTimeout = 5_000
@@ -291,31 +307,14 @@ function fatal(kind, e) {
   if (fatalBurst.length > 20) { process.stderr.write('pocket-asr: too many unexpected errors in a minute, exiting\n'); process.exit(1) }
 }
 
-async function main(argv) {
+export function installFatalHandlers() {
   process.on('uncaughtException', (e) => fatal('uncaught-exception', e))
   process.on('unhandledRejection', (e) => fatal('unhandled-rejection', e))
-  const i = argv.indexOf('--config')
-  const file = i >= 0 ? argv[i + 1] : process.env.ASR_CONFIG
-  if (!file) {
-    process.stderr.write('usage: node src/server.mjs --config <file.json>   (or ASR_CONFIG=<file.json>)\n')
-    process.exit(2)
-  }
-  let gw
-  try {
-    const { ensureConfiguredModels } = await import('./models.mjs')
-    await ensureConfiguredModels(file, { log: (m) => process.stdout.write(`${new Date().toISOString()} models ${m}\n`) })
-    gw = createGateway(file)
-  } catch (e) {
-    process.stderr.write(`pocket-asr: ${e.message}\n`)
-    process.exit(78)
-  }
-  const addr = await gw.listen()
-  const engines = [...gw.engines.values()].map((e) => `${e.id}(${e.type}:${e.langs.join('/')})`).join(' ')
-  process.stdout.write(`${new Date().toISOString()} pocket-asr ${VERSION} gw=${gw.config.gatewayId} listening ${gw.config.tls ? 'https' : 'http'}://${addr.address}:${addr.port} auth=${gw.auth.methods.join('+')} engines=${engines}\n`)
-  const stop = async () => { await gw.close(); process.exit(0) }
-  process.on('SIGTERM', stop)
-  process.on('SIGINT', stop)
 }
 
+// `node src/server.mjs [--config file]` is the same as `node src/main.mjs [--config file]` (the official deployment's
+// systemd unit runs this file).
 const self = fileURLToPath(import.meta.url)
-if (process.argv[1] && path.resolve(process.argv[1]) === self) main(process.argv.slice(2))
+if (process.argv[1] && path.resolve(process.argv[1]) === self) {
+  import('./main.mjs').then((m) => m.cli(['start', ...process.argv.slice(2)]))
+}

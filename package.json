@@ -1,15 +1,15 @@
 {
   "name": "pocket-asr",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Speech-recognition gateway for Pocket: one small HTTP API in front of cloud engines (Volcano, Alibaba, Tencent, iFlytek, OpenAI, Deepgram, Azure) and local ones (sherpa-onnx, whisper.cpp, Vosk). No audio or text is stored or logged.",
   "license": "AGPL-3.0-only",
   "type": "module",
   "private": true,
   "engines": { "node": ">=22" },
-  "bin": { "pocket-asr": "src/server.mjs" },
+  "bin": { "pocket-asr": "src/main.mjs" },
   "scripts": {
-    "start": "node src/server.mjs --config asr.json",
+    "start": "node src/main.mjs",
     "test": "node --test --test-timeout=60000 'test/*.test.mjs'"
   },
-  "files": ["src/", "scripts/", "models.json", "asr.example.json", "README.md", "LICENSE"]
+  "files": ["src/", "scripts/", "models.json", "asr.example.json", "README.md", "README.zh-CN.md", "LICENSE", "LICENSE-MIT"]
 }

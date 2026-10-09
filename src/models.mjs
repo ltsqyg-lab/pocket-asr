@@ -95,7 +95,7 @@ function payloadDir(dir) {
  * Install model `id` at `target` (a directory for archives, a file path for single-file models such as ggml).
  * Does nothing when `target` already exists.
  */
-export async function installModel(id, target, { manifest = loadManifest(), mirrors, log = () => {}, signal, fetchImpl, allowUnverified } = {}) {
+export async function installModel(id, target, { manifest = loadManifest(), mirrors, log = () => {}, signal, fetchImpl, allowUnverified, onProgress } = {}) {
   const m = manifest.models?.[id]
   if (!m) throw new Error(`unknown model "${id}"`)
   if (exists(target)) return target
@@ -105,7 +105,7 @@ export async function installModel(id, target, { manifest = loadManifest(), mirr
   try {
     const file = path.join(work, path.basename(m.file))
     log(`downloading ${id} (${Math.round(m.size / 1048576)} MB)`)
-    await downloadVerified({ urls: urlsFor(m, mirrors ?? manifest.mirrors), sha256: m.sha256, size: m.size, dest: file, signal, fetchImpl, allowUnverified })
+    await downloadVerified({ urls: urlsFor(m, mirrors ?? manifest.mirrors), sha256: m.sha256, size: m.size, dest: file, signal, fetchImpl, allowUnverified, onProgress })
     if (!m.archive) {
       fs.renameSync(file, target)
     } else {
@@ -123,7 +123,7 @@ export async function installModel(id, target, { manifest = loadManifest(), mirr
 /**
  * Install an engine program for this platform into destDir; returns the program path.
  */
-export async function installEngine(engine, destDir, { manifest = loadManifest(), platform = platformKey(), mirrors, log = () => {}, signal, fetchImpl, allowUnverified } = {}) {
+export async function installEngine(engine, destDir, { manifest = loadManifest(), platform = platformKey(), mirrors, log = () => {}, signal, fetchImpl, allowUnverified, onProgress } = {}) {
   const b = manifest.engines?.[engine]?.binaries?.[platform]
   if (!b) throw new Error(`no prebuilt ${engine} for ${platform}: ${manifest.engines?.[engine]?.howto || 'build it from source'}`)
   const bin = path.join(destDir, b.bin)
@@ -134,7 +134,7 @@ export async function installEngine(engine, destDir, { manifest = loadManifest()
   try {
     const file = path.join(work, path.basename(b.file))
     log(`downloading ${engine} ${platform} (${Math.round(b.size / 1048576)} MB)`)
-    await downloadVerified({ urls: urlsFor(b, mirrors ?? manifest.mirrors), sha256: b.sha256, size: b.size, dest: file, signal, fetchImpl, allowUnverified })
+    await downloadVerified({ urls: urlsFor(b, mirrors ?? manifest.mirrors), sha256: b.sha256, size: b.size, dest: file, signal, fetchImpl, allowUnverified, onProgress })
     const out = path.join(work, 'x')
     await extractArchive(file, out, { signal })
     if (exists(destDir)) fs.rmSync(destDir, { recursive: true, force: true })
@@ -150,14 +150,29 @@ export async function installEngine(engine, destDir, { manifest = loadManifest()
 
 /**
  * Gateway start-up: for each local engine with `"install": { "model": "<id>" }` whose model path is missing,
- * download it from the manifest (used by the `local` Docker image on first start).
+ * download it from the manifest (used by the `local` Docker image on first start). `config` is a file path or the
+ * config object.
  */
-export async function ensureConfiguredModels(configFile, { log = () => {}, fetchImpl } = {}) {
-  let raw
-  try { raw = JSON.parse(fs.readFileSync(configFile, 'utf8')) } catch { return }
-  for (const e of Array.isArray(raw.engines) ? raw.engines : []) {
+export async function ensureConfiguredModels(config, { log = () => {}, fetchImpl, onProgress } = {}) {
+  let raw = config
+  if (typeof config === 'string') {
+    try { raw = JSON.parse(fs.readFileSync(config, 'utf8')) } catch { return }
+  }
+  for (const e of Array.isArray(raw?.engines) ? raw.engines : []) {
     const id = e?.install?.model
     if (!id || typeof e.model !== 'string' || exists(e.model)) continue
-    await installModel(id, e.model, { log, fetchImpl, mirrors: e.install.mirrors })
+    await installModel(id, e.model, { log, fetchImpl, mirrors: e.install.mirrors, onProgress })
+  }
+}
+
+/** A progress callback that logs every `step` percent of a download (for logs that nobody watches live). */
+export function progressLogger(log, step = 10) {
+  let next = step, last = 0
+  return (n, size) => {
+    if (!size) return
+    if (n < last) next = step                 // the next source starts from the beginning
+    last = n
+    const pct = Math.floor((n * 100) / size)
+    if (pct >= next && pct < 100) { log(`  ${pct}% of ${Math.round(size / 1048576)} MB`); next = (Math.floor(pct / step) + 1) * step }
   }
 }

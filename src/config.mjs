@@ -1,6 +1,8 @@
 // Configuration (ASR.md §6). JSON file; any string value "env:NAME" is read from the environment at startup and
 // "file:/path" from a file (trimmed), so secrets never sit in the config. An engine may also name a
 // "secretsFile": a JSON object merged into that engine's settings (e.g. an existing credentials file).
+// Every key has a default (ASR.md §11): with no file at all, `node src/main.mjs` serves HTTPS on port 8444 with its own
+// certificate, a token it makes on first start and the default local engine.
 
 import fs from 'node:fs'
 import { checkKeyEntry, LABEL_RE } from './auth.mjs'
@@ -17,6 +19,12 @@ export const DEFAULT_LIMITS = {
 }
 
 const GATEWAY_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+export const DEFAULT_PORT = 8444                  // next to pocket-relay's 8443 on the same server
+export const DEFAULT_GATEWAY_ID = 'my-asr'
+export const DEFAULT_COORD_URL = 'https://pocket.pocketcli.net'
+const TLS_WORDS = ['auto', 'self', 'off']
+/** loadConfig's result carries this mark, so createGateway() does not load it a second time. */
+export const LOADED = Symbol.for('pocket-asr.config')
 
 /** Replace "env:NAME" / "file:/path" strings anywhere in the object (returns a new object). */
 export function resolveSecrets(v, env = process.env, where = 'config') {
@@ -43,20 +51,43 @@ export function resolveSecrets(v, env = process.env, where = 'config') {
 
 /**
  * Load and validate. `raw` is a parsed object or a path to a JSON file.
+ * Does not insist on a way to authenticate: tokens may also live in the data directory (tokens.mjs), so createGateway()
+ * checks that.
  * @returns {object} normalized config (engines still raw: buildEngines() validates them per adapter)
  */
 export function loadConfig(raw, env = process.env) {
+  if (raw && raw[LOADED]) return raw
   if (typeof raw === 'string') {
     try { raw = JSON.parse(fs.readFileSync(raw, 'utf8')) } catch (e) { throw new Error(`config: cannot read ${raw} (${e.message})`) }
   }
   if (!raw || typeof raw !== 'object') throw new Error('config: must be a JSON object')
   const c = resolveSecrets(raw, env)
 
-  if (!GATEWAY_ID_RE.test(c.gatewayId || '')) throw new Error(`config: gatewayId must match ${GATEWAY_ID_RE}`)
-  const listen = { host: '127.0.0.1', port: 8080, ...(c.listen || {}) }
+  const ticketOn = c.auth?.ticket?.enabled === true
+  // tickets are addressed to asr:<gatewayId>, so a gateway that takes them must say its id
+  if (ticketOn && c.gatewayId === undefined) throw new Error('config: auth.ticket needs a "gatewayId" (tickets are addressed to asr:<gatewayId>)')
+  const gatewayId = c.gatewayId ?? DEFAULT_GATEWAY_ID
+  if (!GATEWAY_ID_RE.test(gatewayId)) throw new Error(`config: gatewayId must match ${GATEWAY_ID_RE}`)
+  // host null = every address (IPv6 and IPv4)
+  const listen = { host: null, port: DEFAULT_PORT, ...(c.listen || {}) }
   if (!Number.isInteger(listen.port) || listen.port < 0 || listen.port > 65535) throw new Error('config: listen.port must be 0–65535')
-  if (c.tls && (typeof c.tls.cert !== 'string' || typeof c.tls.key !== 'string')) throw new Error('config: tls needs "cert" and "key" file paths (or null)')
+  if (listen.host !== null && (typeof listen.host !== 'string' || !listen.host)) throw new Error('config: listen.host must be an address (or null for all)')
+  const tls = c.tls === undefined ? 'auto' : c.tls
+  if (typeof tls === 'string' ? !TLS_WORDS.includes(tls) : tls !== null && (typeof tls !== 'object' || typeof tls.cert !== 'string' || typeof tls.key !== 'string')) {
+    throw new Error('config: tls must be "auto", "self", "off" (or null), or { "cert": <file>, "key": <file> }')
+  }
   if (c.basePath !== undefined && !/^(\/[A-Za-z0-9._-]+)*$/.test(c.basePath)) throw new Error('config: basePath must look like "/asr" (or "")')
+  let publicUrl = null
+  if (c.publicUrl !== undefined && c.publicUrl !== null && c.publicUrl !== '') {
+    let u
+    try { u = new URL(c.publicUrl) } catch { throw new Error('config: publicUrl must be a URL like https://203.0.113.7:8444') }
+    if (u.protocol !== 'https:' || !u.hostname || u.username || u.password || u.search || u.hash) {
+      throw new Error('config: publicUrl must be https://<host>[:<port>][/<path>] (the App only talks HTTPS)')
+    }
+    publicUrl = u.href.replace(/\/+$/, '')
+  }
+  const coordUrl = c.coordUrl ?? DEFAULT_COORD_URL
+  if (typeof coordUrl !== 'string' || !/^https?:\/\/[^/]/.test(coordUrl)) throw new Error('config: coordUrl must be http(s)://…')
 
   const auth = c.auth || {}
   const tokens = auth.tokens || []
@@ -78,7 +109,6 @@ export function loadConfig(raw, env = process.env) {
       throw new Error('config: auth.ticket.accounts must be a list of account ids or ["*"]')
     }
   }
-  if (!tokens.length && !ticket.enabled) throw new Error('config: enable at least one way to authenticate (auth.tokens or auth.ticket)')
 
   const limits = { ...DEFAULT_LIMITS, ...(c.limits || {}) }
   for (const [k, v] of Object.entries(limits)) {
@@ -103,9 +133,12 @@ export function loadConfig(raw, env = process.env) {
   }
 
   return {
-    gatewayId: c.gatewayId,
+    [LOADED]: true,
+    gatewayId,
     listen,
-    tls: c.tls || null,
+    tls,
+    publicUrl,
+    coordUrl,
     basePath: c.basePath || '',
     dataDir: c.dataDir || null,
     auth: { tokens, ticket },

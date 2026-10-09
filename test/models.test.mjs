@@ -108,6 +108,11 @@ test('models.json: every entry has a file, URL, size and a pinned SHA-256 with i
   }
   for (const [id, x] of Object.entries(m.models)) assert.ok(m.engines[x.engine], `${id} names a known engine`)
   assert.deepEqual(urlsFor(m.models['sense-voice-int8'], m.mirrors), [
-    'https://pocket.pocketcli.net/dl/asr/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2', m.models['sense-voice-int8'].url])
+    'https://pocket.pocketcli.net/dl/asr/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2', m.models['sense-voice-int8'].url])
   assert.equal(Object.values(m.models).filter((x) => x.recommended).length, 1)
+  // the recommended SenseVoice is the 2024-07-17 release: 2025-09-09 is a Cantonese fine-tune (Mandarin and English come
+  // out tagged <|yue|>, without punctuation, English in capitals) — the same file the desktop agent pins (ASR_PINNED)
+  const svm = m.models['sense-voice-int8']
+  assert.deepEqual([svm.file, svm.size, svm.sha256], ['sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2', 163002883, '7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e'])
+  assert.ok(!Object.values(m.models).some((x) => /2025-09-09/.test(x.file + x.url)), 'the Cantonese fine-tune is not offered')
 })

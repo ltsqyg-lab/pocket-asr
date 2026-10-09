@@ -1,42 +1,44 @@
 # pocket-asr — two images from one file:
 #
-#   docker build --target slim  -t pocket-asr:slim  .    cloud engines only
-#   docker build --target local -t pocket-asr:local .    + sherpa-onnx; the configured model is downloaded on first start
+#   docker build -t pocket-asr .                       default: local recognition with sherpa-onnx (the speech model,
+#                                                      about 160 MB, is downloaded into the data volume on first start)
+#   docker build --target slim -t pocket-asr:slim .    cloud engines only (needs a config file naming them)
 #
-#   docker run -d -p 8080:8080 -v $PWD/asr.json:/config/asr.json:ro -v asr-data:/data -v asr-models:/models pocket-asr:local
+#   docker run -d --name pocket-asr --restart unless-stopped -p 8444:8444 -v pocket-asr:/var/lib/pocket-asr pocket-asr
+#   docker logs pocket-asr                             → the line to paste into the Pocket App
 #
-# Put TLS in front (Caddy, nginx, a cloud load balancer) or set "tls" in the config. Runs as the unprivileged `node`
-# user; the only writable places are /data (keys and revocations state) and /models.
+# No domain and no certificate to buy: on first start the gateway makes a self-signed certificate and the App pins it.
+# A config file is optional: -v $PWD/asr.json:/etc/pocket-asr/asr.json:ro. Runs as the unprivileged `node` user; the
+# only writable place is /var/lib/pocket-asr (certificate, token hashes, model, coordination keys).
 
 FROM node:22-alpine AS slim
 WORKDIR /app
-COPY package.json models.json LICENSE README.md ./
+COPY package.json models.json LICENSE LICENSE-MIT README.md ./
 COPY src/ src/
 COPY scripts/ scripts/
-RUN mkdir -p /data /models && chown node:node /data /models
+RUN mkdir -p /var/lib/pocket-asr && chown node:node /var/lib/pocket-asr
 USER node
-ENV ASR_CONFIG=/config/asr.json \
-    ASR_HEALTH_URL=http://127.0.0.1:8080/healthz
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s \
-  CMD node -e "fetch(process.env.ASR_HEALTH_URL).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
-CMD ["node", "src/server.mjs"]
+ENV ASR_DATA_DIR=/var/lib/pocket-asr
+VOLUME ["/var/lib/pocket-asr"]
+EXPOSE 8444
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD ["node", "src/main.mjs", "--health"]
+CMD ["node", "src/main.mjs"]
 
 FROM node:22-bookworm-slim AS local
-# bzip2 for the .tar.bz2 models, ca-certificates for HTTPS downloads
+# bzip2 for the .tar.bz2 archives, ca-certificates for HTTPS downloads
 RUN apt-get update && apt-get install -y --no-install-recommends bzip2 ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package.json models.json LICENSE README.md ./
+COPY package.json models.json LICENSE LICENSE-MIT README.md ./
 COPY src/ src/
 COPY scripts/ scripts/
 # The engine program for this image's architecture (linux-x64 / linux-arm64), checked against models.json.
-RUN node src/cli.mjs install-engine sherpa-onnx /opt/sherpa \
- && mkdir -p /data /models && chown node:node /data /models
+# Behind a proxy: docker build --build-arg HTTPS_PROXY=http://<proxy> -t pocket-asr .
+RUN NODE_USE_ENV_PROXY=1 node src/cli.mjs install-engine sherpa-onnx /opt/sherpa \
+ && mkdir -p /var/lib/pocket-asr && chown node:node /var/lib/pocket-asr
 USER node
-ENV ASR_CONFIG=/config/asr.json \
-    ASR_HEALTH_URL=http://127.0.0.1:8080/healthz
-VOLUME ["/models", "/data"]
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=600s \
-  CMD node -e "fetch(process.env.ASR_HEALTH_URL).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
-CMD ["node", "src/server.mjs"]
+ENV ASR_DATA_DIR=/var/lib/pocket-asr
+VOLUME ["/var/lib/pocket-asr"]
+EXPOSE 8444
+# the first start downloads the model before it listens
+HEALTHCHECK --interval=30s --timeout=5s --start-period=600s CMD ["node", "src/main.mjs", "--health"]
+CMD ["node", "src/main.mjs"]

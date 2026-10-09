@@ -3,4 +3,6 @@ test/
 asr.json
 data/
 models/
+sherpa/
+.lab/
 .git

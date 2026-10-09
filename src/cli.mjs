@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// pocket-asr helper commands.
+// pocket-asr helper commands (starting the gateway and managing its tokens: src/main.mjs).
 //
-//   node src/cli.mjs token [label]                    new random token; prints it once plus the config entry (hash only)
-//   node src/cli.mjs check <config.json>              load the config, validate every engine, print what /v1/info will say
+//   node src/cli.mjs token [label]                    new random token for the config file; prints it once plus the
+//                                                     config entry (hash only). Simpler: node src/main.mjs new-token
+//   node src/cli.mjs check [config.json]              load the config as node src/main.mjs would (defaults, ASR_* variables),
+//                                                     validate every engine, print what /v1/info will say
 //   node src/cli.mjs models                           list installable models and engine programs
 //   node src/cli.mjs install-model <id> <target>      download + verify + unpack a model (target = directory, or file for ggml)
 //   node src/cli.mjs install-engine <engine> <dir>    download + verify + unpack an engine program for this platform
@@ -24,13 +26,24 @@ async function main() {
   if (cmd === 'token') {
     const label = args[0] || 'my phone'
     const token = crypto.randomBytes(32).toString('base64url')
-    out(`token (shown once — put it into the Pocket App, Settings → Voice → My own gateway):\n\n  ${token}\n`)
+    out(`token (shown once):\n\n  ${token}\n`)
     out(`config entry for auth.tokens:\n\n  ${JSON.stringify({ label, sha256: hashToken(token) })}\n`)
+    out('For the App, add "&token=<the token>" to the line `node src/main.mjs connect-string` prints — or let')
+    out('`node src/main.mjs new-token` make a token and print the complete line (the hash goes into the data directory).')
     return
   }
   if (cmd === 'check') {
     const { createGateway } = await import('./server.mjs')
-    const gw = createGateway(args[0])
+    const { rawConfig } = await import('./main.mjs')
+    const raw = rawConfig(args[0] || null, process.env)
+    if (!Array.isArray(raw.engines) || !raw.engines.length) {
+      const { loadConfig } = await import('./config.mjs')
+      loadConfig({ ...raw, engines: [], default: {} })
+      out('settings ok; no engines configured: node src/main.mjs uses local recognition (sherpa-onnx + SenseVoice), installed into the data directory on first start')
+      return
+    }
+    const gw = createGateway(raw, { allowNoAuth: true })
+    if (!gw.auth.methods.length) out('no token yet: the first start of node src/main.mjs makes one (or: node src/main.mjs new-token)\n')
     out(JSON.stringify(gw.info(), null, 2))
     await gw.close()
     return
@@ -72,6 +85,7 @@ async function main() {
     return
   }
   out('commands: token | check | models | install-model | install-engine | transcribe   (see the top of src/cli.mjs)')
+  out('start the gateway, tokens, the connection line: node src/main.mjs --help')
   process.exitCode = 2
 }
 

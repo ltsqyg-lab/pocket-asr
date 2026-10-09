@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { transcribeLocal, LocalAsrError, resolveModel, buildArgs, parseOutput, tidy } from '../src/engines/local.mjs'
+import { transcribeLocal, LocalAsrError, resolveModel, buildArgs, parseOutput, tidy, asciiRelative, winShellLine } from '../src/engines/local.mjs'
 import { toneWav, silentWav, tmpDir, startGateway, baseConfig, post, TOKEN, wavWithChunks, tonePcm } from './helpers.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -63,6 +63,86 @@ test('sherpa-onnx Paraformer (model.onnx fallback), the object form, auto langua
   const r = await transcribeLocal({ engine: 'sherpa-onnx', bin: bins.sherpa, model: sv, wav: toneWav(1), tmpDir: dir, env: env('stderr-json') })
   assert.equal(r.text, '开放时间早上9点至下午5点。')
   assert.deepEqual(leftovers(dir), [])
+})
+
+test('SenseVoice is never told "en" (Chinese speech then comes out as nonsense): zh stays zh, everything else is auto', async () => {
+  const m = { kind: 'sense-voice', model: 'model.int8.onnx', tokens: 'tokens.txt' }
+  const svLang = (lang) => buildArgs('sherpa-onnx', m, { file: 'a.wav', lang }).find((a) => a.startsWith('--sense-voice-language='))
+  assert.equal(svLang('zh'), '--sense-voice-language=zh')
+  for (const l of ['en', 'auto', undefined, 'yue', 'fr']) assert.equal(svLang(l), '--sense-voice-language=auto', String(l))
+  const dir = work()
+  await transcribeLocal({ engine: 'sherpa-onnx', bin: bins.sherpa, model: sv, wav: toneWav(1), lang: 'en', tmpDir: dir, env: env() })
+  assert.ok(readLog().argv.includes('--sense-voice-language=auto'))
+  assert.ok(!readLog().argv.some((a) => a.endsWith('=en')))
+})
+
+test('Windows: ASCII relative paths when a path has non-ASCII characters (sherpa-onnx cannot open those)', () => {
+  const home = 'C:\\Users\\张三\\.pocket\\asr', mdl = `${home}\\models\\sense-voice-int8-2024`
+  const files = [`${mdl}\\model.int8.onnx`, `${mdl}\\tokens.txt`, `${home}\\tmp\\pocket-asr-Ab12Cd\\0a1b2c.wav`, `${home}\\tmp\\pocket-asr-Ab12Cd\\0a1b2c.txt`]
+  const r = asciiRelative(files)
+  assert.equal(r.cwd, home, 'the deepest directory holding every file')
+  assert.deepEqual(files.map(r.rel), ['models\\sense-voice-int8-2024\\model.int8.onnx', 'models\\sense-voice-int8-2024\\tokens.txt',
+    'tmp\\pocket-asr-Ab12Cd\\0a1b2c.wav', 'tmp\\pocket-asr-Ab12Cd\\0a1b2c.txt'])
+  assert.equal(r.rel('C:\\other'), 'C:\\other', 'paths it was not given are left alone')
+  // Windows ignores case and accepts / as well
+  const r2 = asciiRelative(['c:/users/张三/.pocket/asr/models/m/tokens.txt', 'C:\\Users\\张三\\.pocket\\asr\\tmp\\p\\a.wav'])
+  assert.equal(r2.cwd.toLowerCase(), home.toLowerCase())
+  assert.deepEqual(['c:/users/张三/.pocket/asr/models/m/tokens.txt', 'C:\\Users\\张三\\.pocket\\asr\\tmp\\p\\a.wav'].map(r2.rel), ['models\\m\\tokens.txt', 'tmp\\p\\a.wav'])
+  // a model directory (Vosk) among the files; .. is resolved first
+  const r3 = asciiRelative(['C:\\Users\\张三\\models\\vosk-cn', 'C:\\Users\\张三\\x\\..\\tmp\\p\\a.wav'])
+  assert.deepEqual([r3?.cwd, r3?.rel('C:\\Users\\张三\\models\\vosk-cn'), r3?.rel('C:\\Users\\张三\\x\\..\\tmp\\p\\a.wav')], ['C:\\Users\\张三', 'models\\vosk-cn', 'tmp\\p\\a.wav'])
+  const r4 = asciiRelative(['C:\\Users\\Zoë\\m\\tokens.txt', 'C:\\Users\\Zoë\\tmp\\a.wav'])
+  assert.equal(r4.cwd, 'C:\\Users\\Zoë')
+  assert.equal(asciiRelative(['C:\\pocket\\models\\m\\tokens.txt', 'C:\\pocket\\tmp\\a.wav']), null, 'all ASCII: absolute paths as before')
+  assert.equal(asciiRelative(['C:\\Users\\张三\\m\\tokens.txt', 'D:\\tmp\\a.wav']), null, 'different drives: nothing helps')
+  assert.equal(asciiRelative(['C:\\Users\\张三\\模型\\tokens.txt', 'C:\\Users\\张三\\tmp\\a.wav']), null, 'a non-ASCII name below the shared directory')
+})
+
+test('Windows: the cmd.exe line quotes every argument; anything cmd.exe would still read means a direct start', () => {
+  const bin = 'C:\\Users\\张三\\.pocket\\asr\\sherpa-onnx\\bin\\sherpa-onnx-offline.exe'
+  assert.equal(winShellLine(bin, ['--tokens=models\\m\\tokens.txt', '--num-threads=2', 'tmp\\p\\a.wav'], 'C:\\Users\\张三\\.pocket\\asr'),
+    `""${bin}" "--tokens=models\\m\\tokens.txt" "--num-threads=2" "tmp\\p\\a.wav""`)
+  assert.ok(winShellLine('C:\\a b & c\\x.exe', ['^!()<>|&', 'd e'], 'C:\\a b & c'), 'cmd.exe specials are plain text inside quotes (/v:off: ! too)')
+  for (const bad of ['say "hi"', '100%', '%PATH%', 'C:\\dir\\', 'a\nb', 'a\rb', '']) assert.equal(winShellLine('C:\\x.exe', ['--x', bad], 'C:\\'), null, JSON.stringify(bad))
+  assert.equal(winShellLine('C:\\50%\\x.exe', ['a'], 'C:\\'), null, 'the program path too')
+  assert.equal(winShellLine('C:\\x.exe', ['a'], '\\\\server\\share\\asr'), null, 'cmd.exe refuses a UNC working directory')
+})
+
+test('the cmd.exe start falls back to a direct start: launcher cannot start / exits non-zero without a result → run directly; results, timeouts and aborts are never retried', { skip: process.platform === 'win32' && 'needs /bin/sh as the stand-in launcher' }, async () => {
+  const dir = work()
+  const seen = []
+  const base = { engine: 'sherpa-onnx', bin: bins.sherpa, model: sv, wav: toneWav(1), lang: 'zh', tmpDir: dir, env: env(), onFallback: (x) => seen.push(x.reason) }
+  const sh = (script) => () => ({ file: '/bin/sh', args: ['-c', script] })          // stands in for cmd.exe
+  // the launcher ran but the program never did (cmd.exe: "not recognized", mangled arguments …) → the program directly
+  fs.rmSync(logFile, { force: true })
+  const r1 = await transcribeLocal({ ...base, launch: sh('echo "The system cannot find the path specified." >&2; exit 1') })
+  assert.equal(r1.text, '开放时间早上9点至下午5点。')
+  assert.deepEqual(seen, ['exit-1'])
+  assert.ok(fs.existsSync(logFile) && readLog().argv.includes('--sense-voice-language=zh'), 'the retry ran the program itself, same arguments')
+  // the launcher cannot be started at all → the program directly
+  const r2 = await transcribeLocal({ ...base, launch: () => ({ file: path.join(root, 'no-such-cmd.exe'), args: ['/c', 'x'] }) })
+  assert.equal(r2.text, '开放时间早上9点至下午5点。')
+  assert.equal(seen.at(-1), 'spawn-ENOENT')
+  // what the program itself reported is final: a result with a non-zero exit, an empty result ("didn't catch that")
+  fs.rmSync(logFile, { force: true })
+  assert.equal(await codeOf(transcribeLocal({ ...base, launch: sh(`echo '{"lang": "<|zh|>", "text": "x"}'; exit 2`) })), 'engine-error')
+  assert.equal(await codeOf(transcribeLocal({ ...base, launch: sh(`echo '{"lang": "<|zh|>", "text": ""}'`) })), 'empty')
+  assert.equal(fs.existsSync(logFile), false, 'not retried')
+  assert.equal(seen.length, 2)
+  // a timeout or an abort through the launcher: not retried, the launcher is killed
+  const t0 = Date.now()
+  assert.equal(await codeOf(transcribeLocal({ ...base, timeoutMs: 400, launch: sh('sleep 30') })), 'engine-timeout')
+  assert.ok(Date.now() - t0 < 5000)
+  const ac = new AbortController()
+  setTimeout(() => ac.abort(), 300)
+  assert.equal(await codeOf(transcribeLocal({ ...base, signal: ac.signal, launch: sh('sleep 30') })), 'aborted')
+  assert.equal(fs.existsSync(logFile), false, 'no direct retry after a timeout or an abort')
+  assert.equal(seen.length, 2)
+  // a launcher returning null = started directly (what every platform but Windows does)
+  const r3 = await transcribeLocal({ ...base, launch: () => null })
+  assert.equal(r3.text, '开放时间早上9点至下午5点。')
+  assert.equal(seen.length, 2)
+  assert.deepEqual(leftovers(dir), [], 'temp directories removed every time')
 })
 
 test('whisper.cpp and Vosk: arguments and output parsing', async () => {
@@ -141,6 +221,14 @@ test('real sherpa-onnx 1.13.8 output (captured on macOS arm64) parses: SenseVoic
   assert.equal(pf.lang, undefined)
   assert.equal(parseOutput('sherpa-onnx', { stdout: '', stderr: fx('sherpa-1.13.8-paraformer.stderr') + fx('sherpa-1.13.8-paraformer.stdout') }).text,
     '把这个文件翻译成英文然后提交代码', 'the same line on stderr (older versions)')
+})
+
+test('real output of the pinned SenseVoice (2024-07-17, sherpa-onnx 1.13.8 on macOS arm64): punctuation, <|zh|> / <|en|>, English as written', () => {
+  const fx = (n) => fs.readFileSync(path.join(HERE, 'fixtures', n), 'utf8')
+  const zh = parseOutput('sherpa-onnx', { stdout: fx('sherpa-1.13.8-sense-voice-2024.stdout'), stderr: fx('sherpa-1.13.8-sense-voice-2024.stderr') })
+  assert.deepEqual([tidy(zh.text), zh.lang], ['帮我把项目里的测试全部跑一遍，然后告诉我结果。', 'zh'])
+  const en = parseOutput('sherpa-onnx', { stdout: fx('sherpa-1.13.8-sense-voice-2024-en.stdout'), stderr: fx('sherpa-1.13.8-sense-voice-2024-en.stderr') })
+  assert.deepEqual([tidy(en.text), en.lang], ['Please run all the tests in this project and tell me the result.', 'en'])
 })
 
 test('helpers: model kind detection, argument builder, output parser, tidy', () => {

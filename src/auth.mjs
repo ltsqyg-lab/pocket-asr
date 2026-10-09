@@ -1,5 +1,6 @@
 // Caller authentication (ASR.md §3):
-//   static tokens   Authorization: Bearer <token>          (config keeps only SHA-256 hashes + a label per token)
+//   static tokens   Authorization: Bearer <token>          (config and <dataDir>/tokens.json keep only SHA-256 hashes +
+//                                                           a label per token)
 //   Pocket tickets  Authorization: PocketTicket <ticket>    + X-Pocket-Proof: <b64u(a)>.<b64u(s)>
 // Tickets are checked offline with coordination keys (pinned, then refreshed from keys.json signed by a trusted key),
 // the proof binds the request body, nonces are single-use for 10 minutes, and signed revocation documents cut off
@@ -35,15 +36,17 @@ export function checkKeyEntry(k) {
 export class Auth {
   /**
    * @param {object} cfg  config.auth
-   * @param {{ gatewayId: string, dataDir?: string|null, now?: () => number, fetch?: typeof fetch, log?: (line: string) => void }} opts
+   * @param {{ gatewayId: string, dataDir?: string|null, now?: () => number, fetch?: typeof fetch, log?: (line: string) => void,
+   *           tokenStore?: { entries(): { label: string, hash: Buffer }[] } }} opts  tokenStore: tokens kept in the data directory
    */
-  constructor(cfg = {}, { gatewayId, dataDir = null, now = () => Date.now(), fetch: fetchImpl = globalThis.fetch, log = () => {} } = {}) {
+  constructor(cfg = {}, { gatewayId, dataDir = null, now = () => Date.now(), fetch: fetchImpl = globalThis.fetch, log = () => {}, tokenStore = null } = {}) {
     this.aud = `asr:${gatewayId}`
     this.now = now
     this.fetch = fetchImpl
     this.log = log
     this.dataDir = dataDir
-    this.tokens = (cfg.tokens || []).map((t) => ({ label: t.label, hash: Buffer.from(t.sha256, 'hex') }))
+    this.cfgTokens = (cfg.tokens || []).map((t) => ({ label: t.label, hash: Buffer.from(t.sha256, 'hex') }))
+    this.tokenStore = tokenStore
     const tk = cfg.ticket || {}
     this.ticketOn = tk.enabled === true
     this.coordUrl = (tk.coordUrl || '').replace(/\/+$/, '')
@@ -59,6 +62,9 @@ export class Auth {
     this.timers = []
     if (this.ticketOn) this._loadState()
   }
+
+  /** The config's tokens plus the ones in the data directory (re-read when tokens.json changes). */
+  get tokens() { return this.tokenStore ? [...this.cfgTokens, ...this.tokenStore.entries()] : this.cfgTokens }
 
   get methods() {
     const m = []
@@ -76,10 +82,11 @@ export class Auth {
     const sp = h.indexOf(' ')
     const scheme = sp > 0 ? h.slice(0, sp) : ''
     const cred = sp > 0 ? h.slice(sp + 1).trim() : ''
-    if (scheme === 'Bearer' && this.tokens.length && cred) {
+    const tokens = scheme === 'Bearer' ? this.tokens : []
+    if (scheme === 'Bearer' && tokens.length && cred) {
       const got = crypto.createHash('sha256').update(cred, 'utf8').digest()
       let hit = null
-      for (const t of this.tokens) if (crypto.timingSafeEqual(got, t.hash) && !hit) hit = t
+      for (const t of tokens) if (crypto.timingSafeEqual(got, t.hash) && !hit) hit = t
       if (hit) return { kind: 'token', caller: `token:${hit.label}` }
       throw new AsrError('unauthorized', 'token')
     }

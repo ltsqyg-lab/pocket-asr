@@ -30,7 +30,7 @@ await ensureConfiguredModels(file, { log: (m) => process.stdout.write(`${new Dat
 const gw = createGateway(file, { adapters: { ...ADAPTERS, 'lab-echo': labEcho } })
 const addr = await gw.listen()
 const engines = [...gw.engines.values()].map((e) => `${e.id}(${e.type})`).join(' ')
-process.stdout.write(`${new Date().toISOString()} pocket-asr ${VERSION} (lab) gw=${gw.config.gatewayId} listening ${gw.config.tls ? 'https' : 'http'}://${addr.address}:${addr.port} auth=${gw.auth.methods.join('+')} engines=${engines}\n`)
+process.stdout.write(`${new Date().toISOString()} pocket-asr ${VERSION} (lab) gw=${gw.config.gatewayId} listening ${gw.tls.mode === 'off' ? 'http' : 'https'}://${addr.address}:${addr.port} auth=${gw.auth.methods.join('+')} engines=${engines}\n`)
 const stop = async () => { await gw.close(); process.exit(0) }
 process.on('SIGTERM', stop)
 process.on('SIGINT', stop)

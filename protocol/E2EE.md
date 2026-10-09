@@ -45,14 +45,14 @@ Non-goals (v1)
 | Coordination server | Pocket (closed source) | accounts, password hashes, device public keys, the lock log, ACL (inside the log), relay registry, grants (ciphertext), coordination signing keys | issue/withhold tickets, suspend devices, see metadata, deny service | forge lock statements, read grants, mint content keys, make a computer obey an unknown device |
 | Relay | Pocket (official) or the user (self-hosted), open source AGPL-3.0 | ciphertext envelopes, objects, blobs; ticket verification keys | drop, delay, reorder, replay ciphertext; see metadata | read or forge content; impersonate devices |
 | Object store (S3-compatible) | a cloud provider | ciphertext blobs | same as relay for blobs | same as relay |
-| ASR gateway | Pocket (official), the user, or nobody | audio for the length of one request (cloud modes only) | hear audio in cloud modes | — (see ASR.md; the official cloud mode is labelled *not end-to-end*) |
+| ASR gateway | Pocket (official), the user, or nobody | audio for the length of one request (cloud modes only) | hear audio in cloud modes | — (see ASR.md) |
 
 Assumptions: TLS (WebPKI) protects transport; device OS key storage protects private keys against other OS users and
 offline disk access; the user compares verification words when approving a device (§6.4 covers when they cannot).
 
 Residual risks the UI and privacy policy must state: metadata (§14); a malicious coordination server can hide lock
-statements from some devices (withholding / equivocation, §5.5) — detectable, not preventable; the official ASR
-cloud mode is not end-to-end; whoever ships the clients could ship a backdoor (mitigated only by publishing this spec
+statements from some devices (withholding / equivocation, §5.5) — detectable, not preventable; cloud voice modes
+necessarily let the gateway hear the audio (the privacy policy says where recordings go); whoever ships the clients could ship a backdoor (mitigated only by publishing this spec
 so others can check behaviour against it).
 
 ## 3. Conventions
@@ -294,10 +294,10 @@ Vectors: `sas` (indices and both renderings).
 - Both screens show the same list: the language in the enrollment request (`sasLang`: `en` or `zh`), chosen by the
   new device from its UI language. English: lowercase words separated by spaces. Chinese: six characters separated by
   spaces (`运 睡 措 宗 煮 池`). Show index-free, large, in two rows of three.
-- Wording (zh / en): 「两台设备上的 6 个字一样吗?」 / "Do both screens show the same 6 words?" — buttons
-  「一样,允许」 / "They match — allow" and 「不一样」 / "They don't match". Plus one line: "These words are not a password
-  and are not a recovery phrase; you never need to write them down." The approval screen also says: "If you did not just
-  sign in on a new device, don't allow it and change your password" (someone who knows the password can create a
+- Wording (zh / en; short, 2026-10-09): 「两台设备上的 6 个字一样吗?」 / "Do both screens show the same 6 words?",
+  buttons 「一样,允许」 / "Yes, allow" and 「不一样」 / "They don't match". Plus one line: 「不用记下这 6 个字。」 /
+  "You don't need to write these down." The approval screen also warns that if the user did not just sign in on a new
+  device, they should not allow it and should change their password (someone who knows the password can create a
   pending device; only an approval lets it in).
 - A device's words stay valid for its lifetime: the device list shows them for every device (any device can recompute
   `words(G, sig, kx)`), so a later comparison is always possible.

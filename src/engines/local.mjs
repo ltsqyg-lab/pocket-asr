@@ -15,16 +15,27 @@
 //   threads default 2                                       timeoutMs default 30 s + audio length
 //   tmpDir  default os.tmpdir()                             signal   optional AbortSignal
 //   env     optional extra environment for the program (e.g. a library directory on PATH on Windows)
+//   onFallback  optional ({ reason }) => void: the cmd.exe start failed and the program is being started directly
+//   launch  optional (bin, args, cwd) => { file, args, verbatim } | null: how to start it (tests); default launchFor
 //
 // The audio is written to a fresh private directory (0700, random names), the program runs with an argument array
-// (no shell), the directory is deleted in `finally`, the program is killed on timeout or abort. Errors are
-// LocalAsrError with `code` in: no-engine, bad-audio, empty, engine-timeout, engine-error, aborted. Neither errors nor
-// anything else here carry the recognised text or the audio.
+// (no shell; on Windows through cmd.exe with every argument quoted, see winShellLine — and when that start fails, or
+// ends non-zero without a result, once more directly), the directory is deleted in `finally`, the program (on Windows
+// its whole process tree) is killed on timeout or abort. Errors are LocalAsrError with `code` in: no-engine, bad-audio,
+// empty, engine-timeout, engine-error, aborted. Neither errors nor anything else here carry the recognised text or the
+// audio.
 //
 // License: AGPL-3.0-only (part of pocket-asr).
 //
 // Revision 2 (2026-10-08): SenseVoice's <|yue|> (Cantonese) is reported as lang 'zh'.
-export const LOCAL_REVISION = 2
+// Revision 3 (2026-10-09): SenseVoice is never told 'en' — someone whose phone is in English but who speaks Chinese
+//   got pinyin-like nonsense — so 'zh' stays 'zh' and everything else is 'auto' (it tells English apart by itself).
+//   Windows: the program is started through cmd.exe (a bun-compiled parent that starts it directly waits ~3.4 s before
+//   it runs, and it then decodes ~2.5× slower), and when a path has non-ASCII characters (sherpa-onnx 1.13.8 can't open
+//   those, 8.3 short names included) it runs in the directory holding all its files and gets ASCII relative paths.
+//   The cmd.exe start is new: if it cannot be started, or exits non-zero without printing a result, the program is
+//   started directly once more (same arguments, directory and time limit; never after a timeout or an abort).
+export const LOCAL_REVISION = 3
 
 import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -125,12 +136,13 @@ export function resolveModel(engine, model) {
   return missing('unknown-engine')
 }
 
-/** Program arguments (an array: no shell anywhere) and how to read the result. */
+/** Program arguments (an array) and how to read the result. */
 export function buildArgs(engine, m, { file, outFile, lang, threads }) {
   const t = String(Math.max(1, Math.min(16, threads | 0 || 2)))
   if (engine === 'sherpa-onnx') {
     if (m.kind === 'sense-voice') {
-      const sv = ['zh', 'en'].includes(lang) ? lang : 'auto'
+      // never 'en': with it, Chinese speech comes out as English-looking nonsense; 'auto' recognises English as well
+      const sv = lang === 'zh' ? 'zh' : 'auto'
       return [`--tokens=${m.tokens}`, `--sense-voice-model=${m.model}`, `--sense-voice-language=${sv}`,
         '--sense-voice-use-itn=1', `--num-threads=${t}`, '--debug=0', file]
     }
@@ -145,23 +157,27 @@ export function buildArgs(engine, m, { file, outFile, lang, threads }) {
 }
 
 /** Pull the text out of what the program printed. */
+/** sherpa-onnx-offline prints one JSON object per file ({"lang": "<|zh|>", "text": "…", …}); recent versions on stdout,
+ * older ones on stderr. The last such object, or null. */
+function sherpaJson(stdout, stderr) {
+  for (const stream of [stdout, stderr]) {
+    const lines = String(stream || '').split(/\r?\n/).filter((l) => l.trim().startsWith('{'))
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const j = JSON.parse(lines[i].trim())
+        if (typeof j.text === 'string') return j
+      } catch { /* not the result line */ }
+    }
+  }
+  return null
+}
+
 export function parseOutput(engine, { stdout, stderr, outText }) {
   if (engine === 'sherpa-onnx') {
-    // sherpa-onnx-offline prints one JSON object per file ({"lang": "<|zh|>", "text": "…", …}); recent versions on
-    // stdout, older ones on stderr.
-    for (const stream of [stdout, stderr]) {
-      const lines = String(stream || '').split(/\r?\n/).filter((l) => l.trim().startsWith('{'))
-      for (let i = lines.length - 1; i >= 0; i--) {
-        try {
-          const j = JSON.parse(lines[i].trim())
-          if (typeof j.text === 'string') {
-            const tag = /<\|(zh|en|yue)\|>/.exec(j.lang || '')?.[1]       // Cantonese is written Chinese too
-            return { text: j.text, lang: tag === 'yue' ? 'zh' : tag }
-          }
-        } catch { /* not the result line */ }
-      }
-    }
-    return { text: '' }
+    const j = sherpaJson(stdout, stderr)
+    if (!j) return { text: '' }
+    const tag = /<\|(zh|en|yue)\|>/.exec(j.lang || '')?.[1]       // Cantonese is written Chinese too
+    return { text: j.text, lang: tag === 'yue' ? 'zh' : tag }
   }
   if (engine === 'whisper.cpp') {
     const text = String(stdout || '').split(/\r?\n/).map((l) => l.replace(/^\s*\[[\d:.\s\->]+\]\s*/, '')).join(' ')
@@ -173,6 +189,60 @@ export function parseOutput(engine, { stdout, stderr, outText }) {
 const CJK = '\\u3000-\\u303f\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uff00-\\uffef'
 const BETWEEN_CJK = new RegExp(`([${CJK}])\\s+(?=[${CJK}])`, 'g')
 export const tidy = (s) => String(s || '').replace(/<\|[^|>]{1,20}\|>/g, '').replace(/\s+/g, ' ').replace(BETWEEN_CJK, '$1').trim()
+
+// ---- Windows -------------------------------------------------------------------------------------------------
+const ASCII = /^[\x20-\x7e]*$/
+
+/**
+ * Windows: sherpa-onnx 1.13.8 can't open a file whose path has a non-ASCII character (a Chinese user name:
+ * C:\Users\张三\…), and the 8.3 short name keeps those characters. So when a path has one, the program runs in the
+ * deepest directory that contains every file it is given and gets ASCII relative paths. Returns { cwd, rel } (rel maps
+ * each given path to its relative form), or null when every path is ASCII already or nothing helps (different
+ * drives, or a non-ASCII name below that directory). `P` is path.win32 (a parameter so tests run anywhere).
+ */
+export function asciiRelative(paths, P = path.win32) {
+  const abs = paths.map((p) => P.resolve(p))
+  if (abs.every((p) => ASCII.test(p))) return null
+  const key = (s) => s.toLowerCase().replace(/\//g, '\\')            // Windows names ignore case
+  const all = abs.map((p) => { const root = P.parse(p).root; return { root, parts: p.slice(root.length).split(/[\\/]+/).filter(Boolean) } })
+  if (all.some((x) => key(x.root) !== key(all[0].root))) return null
+  let n = Math.min(...all.map((x) => x.parts.length - 1))           // directories only, never a file's own name
+  for (let i = 0; i < n; i++) if (all.some((x) => key(x.parts[i]) !== key(all[0].parts[i]))) { n = i; break }
+  const rels = all.map((x) => x.parts.slice(n).join('\\'))
+  if (rels.some((r) => !r || !ASCII.test(r))) return null
+  const map = new Map(paths.map((p, i) => [p, rels[i]]))
+  return { cwd: all[0].root + all[0].parts.slice(0, n).join('\\'), rel: (p) => (map.has(p) ? map.get(p) : p) }
+}
+
+/**
+ * Windows: the command line for `cmd.exe /d /v:off /s /c <line>` (node's own `shell: true` form) that runs `bin` with
+ * `args`, every one of them quoted — or null when cmd.exe would still read something inside the quotes (" or %),
+ * an argument ends in a backslash (the program would read \" as a quote), has a control character, or the working
+ * directory is a UNC path (cmd.exe refuses those). Then the program is started directly. Through cmd.exe a
+ * bun-compiled parent starts it as fast as node does (measured: 1.3 s instead of 5.1–5.5 s for the same clip).
+ */
+export function winShellLine(bin, args, cwd) {
+  const all = [bin, ...args]
+  if (all.some((a) => typeof a !== 'string' || !a || /["%\x00-\x1f\x7f]/.test(a) || a.endsWith('\\')) || /^[\\/]{2}/.test(cwd || '')) return null
+  return `"${all.map((a) => `"${a}"`).join(' ')}"`
+}
+
+const winSystem32 = () => path.join(process.env.SystemRoot || process.env.WINDIR || process.env.windir || 'C:\\Windows', 'System32')
+
+/** How the program is started: on Windows through cmd.exe ({ file, args, verbatim }), elsewhere — or when the line
+ * can't be built — directly (null). */
+export function launchFor(bin, args, cwd) {
+  if (process.platform !== 'win32') return null
+  const line = winShellLine(bin, args, cwd)
+  return line ? { file: path.join(winSystem32(), 'cmd.exe'), args: ['/d', '/v:off', '/s', '/c', line], verbatim: true } : null
+}
+
+/** Did the program leave a result (even an empty one)? Then a non-zero exit is the program's own, not the launcher's. */
+function leftResult(engine, r, outFile) {
+  if (engine === 'sherpa-onnx') return !!sherpaJson(r.stdout, r.stderr)
+  if (engine === 'whisper.cpp') return /\S/.test(r.stdout)
+  return isFile(outFile)
+}
 
 // ---- running the program -------------------------------------------------------------------------------------
 function childEnv(extra) {
@@ -186,12 +256,14 @@ function childEnv(extra) {
   return env
 }
 
-function run(bin, args, { timeoutMs, signal, env, cwd }) {
+/** Run `bin args` — directly, or through `via` ({ file, args, verbatim }: cmd.exe on Windows). */
+function run(bin, args, { timeoutMs, signal, env, cwd, via }) {
   return new Promise((resolve, reject) => {
     const posix = process.platform !== 'win32'
     let child
     try {
-      child = spawn(bin, args, { cwd, env: childEnv(env), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: posix })
+      const opts = { cwd, env: childEnv(env), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: posix }
+      child = via ? spawn(via.file, via.args, { ...opts, windowsVerbatimArguments: !!via.verbatim }) : spawn(bin, args, opts)
     } catch (e) {
       return reject(new LocalAsrError('no-engine', `spawn-${e.code || 'failed'}`))
     }
@@ -200,7 +272,16 @@ function run(bin, args, { timeoutMs, signal, env, cwd }) {
     const kill = (reason) => {
       if (why || finished) return
       why = reason
-      try { if (posix) process.kill(-child.pid, 'SIGKILL'); else child.kill() } catch { try { child.kill('SIGKILL') } catch { /* gone */ } }
+      const plain = () => { try { child.kill() } catch { /* gone */ } }
+      try {
+        if (posix) process.kill(-child.pid, 'SIGKILL')
+        else if (via && child.pid) {
+          // cmd.exe and the program under it: kill the tree (child.kill() would stop only cmd.exe)
+          const k = spawn(path.join(winSystem32(), 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+          k.on('error', plain)
+          k.on('close', (code) => { if (code !== 0) plain() })
+        } else plain()
+      } catch { try { child.kill('SIGKILL') } catch { /* gone */ } }
     }
     const timer = setTimeout(() => kill('timeout'), timeoutMs)
     const onAbort = () => kill('abort')
@@ -225,7 +306,7 @@ function run(bin, args, { timeoutMs, signal, env, cwd }) {
 }
 
 // ---- the entry point ------------------------------------------------------------------------------------------
-export async function transcribeLocal({ engine, bin, model, wav, lang = 'auto', threads = 2, timeoutMs, tmpDir, signal, env, silencePeak = SILENCE_PEAK } = {}) {
+export async function transcribeLocal({ engine, bin, model, wav, lang = 'auto', threads = 2, timeoutMs, tmpDir, signal, env, silencePeak = SILENCE_PEAK, onFallback, launch = launchFor } = {}) {
   const t0 = Date.now()
   if (!LOCAL_ENGINES.includes(engine)) throw new LocalAsrError('no-engine', 'unknown-engine')
   if (signal?.aborted) throw new LocalAsrError('aborted')
@@ -241,8 +322,28 @@ export async function transcribeLocal({ engine, bin, model, wav, lang = 'auto', 
     const file = path.join(dir, `${name}.wav`)
     const outFile = path.join(dir, `${name}.txt`)
     fs.writeFileSync(file, canonicalWav(pcm), { mode: 0o600, flag: 'wx' })
-    const args = buildArgs(engine, m, { file, outFile, lang, threads })
-    const r = await run(bin, args, { timeoutMs: limit, signal, env, cwd: dir })
+    let cwd = dir, mp = m, fileArg = file, outArg = outFile
+    const near = process.platform === 'win32' ? asciiRelative([m.model, m.tokens, file, outFile].filter((p) => typeof p === 'string')) : null
+    if (near) {
+      cwd = near.cwd
+      mp = { ...m, model: near.rel(m.model), ...(typeof m.tokens === 'string' ? { tokens: near.rel(m.tokens) } : {}) }
+      fileArg = near.rel(file); outArg = near.rel(outFile)
+    }
+    const args = buildArgs(engine, mp, { file: fileArg, outFile: outArg, lang, threads })
+    const via = launch ? launch(bin, args, cwd) : null
+    let r = null, fallback = null
+    try {
+      r = await run(bin, args, { timeoutMs: limit, signal, env, cwd, via })
+    } catch (e) {
+      if (!via || !(e instanceof LocalAsrError) || e.code !== 'no-engine') throw e      // timeouts and aborts: never again
+      fallback = e.detail || 'spawn-failed'
+    }
+    if (via && !fallback && r.code !== 0 && !leftResult(engine, r, outFile)) fallback = `exit-${r.code ?? r.signal}`
+    if (fallback) {
+      // the cmd.exe start is new (2026-10-09) and not proven on every machine: the way it was done before, once more
+      try { onFallback?.({ reason: fallback }) } catch { /* the caller's logging */ }
+      r = await run(bin, args, { timeoutMs: limit, signal, env, cwd, via: null })
+    }
     if (r.code !== 0) throw new LocalAsrError('engine-error', `exit-${r.code ?? r.signal}`)
     const outText = engine === 'vosk' && isFile(outFile) ? fs.readFileSync(outFile, 'utf8') : undefined
     const res = parseOutput(engine, { stdout: r.stdout, stderr: r.stderr, outText })
