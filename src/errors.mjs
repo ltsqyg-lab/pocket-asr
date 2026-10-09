@@ -8,6 +8,7 @@ export const STATUS = {
   'empty': 422,
   'unauthorized': 401,
   'rate': 429,
+  'quota': 429,
   'busy': 503,
   'no-engine': 400,
   'engine-error': 502,
@@ -24,6 +25,7 @@ const MESSAGES = {
   'empty': 'no speech recognised',
   'unauthorized': 'missing or invalid credentials',
   'rate': 'too many requests, slow down',
+  'quota': 'speech time used up for now',
   'busy': 'the gateway is busy, try again shortly',
   'no-engine': 'no engine for this language',
   'engine-error': 'the speech engine failed',
@@ -37,7 +39,7 @@ export class AsrError extends Error {
   /**
    * @param {string} code    one of STATUS
    * @param {string} [detail] short machine detail for the log (e.g. 'expired', 'provider:40000001', 'http-401')
-   * @param {object} [extra]  { retryAfter } seconds
+   * @param {object} [extra]  { retryAfter } seconds; { body } more fields for the answer (e.g. `quota`: zh, en, quota)
    */
   constructor(code, detail, extra = {}) {
     super(MESSAGES[code] || code)
@@ -45,9 +47,10 @@ export class AsrError extends Error {
     this.code = STATUS[code] ? code : 'engine-error'
     this.detail = detail ? cleanDetail(detail) : undefined
     this.retryAfter = extra.retryAfter
+    this.body = extra.body && typeof extra.body === 'object' ? extra.body : null
   }
   get status() { return STATUS[this.code] || 500 }
-  toJSON() { return { ok: false, code: this.code, message: this.message } }
+  toJSON() { return { ok: false, code: this.code, message: this.message, ...(this.body ?? {}) } }
 }
 
 /** Provider codes and internal reasons go to the log: keep them short and inert. */

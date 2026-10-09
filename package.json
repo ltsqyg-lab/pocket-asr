@@ -1,6 +1,6 @@
 {
   "name": "pocket-asr",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Speech-recognition gateway for Pocket: one small HTTP API in front of cloud engines (Volcano, Alibaba, Tencent, iFlytek, OpenAI, Deepgram, Azure) and local ones (sherpa-onnx, whisper.cpp, Vosk). No audio or text is stored or logged.",
   "license": "AGPL-3.0-only",
   "type": "module",

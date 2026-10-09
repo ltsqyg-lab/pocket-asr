@@ -211,6 +211,7 @@ Optional. The file comes from `--config <file>`, else `ASR_CONFIG`, else `/etc/p
 | `ASR_PUBLIC_URL` | `publicUrl` | asked from the coordination server |
 | `ASR_TLS` | `tls`: `auto`, `self` or `off` | `auto` |
 | `ASR_COORD_URL` | `coordUrl` | `https://pocket.pocketcli.net` |
+| `ASR_DAY_MINUTES`, `ASR_MONTH_MINUTES` | `limits.dayMinutes`, `limits.monthMinutes` | `120`, `1500` |
 | `ASR_SHERPA_BIN` | the default engine's program | the image's, else installed into the data directory |
 
 | Key | Default | |
@@ -221,7 +222,8 @@ Optional. The file comes from `--config <file>`, else `ASR_CONFIG`, else `/etc/p
 | `publicUrl` | `null` | `https://<host>[:<port>][/<path>]` that phones use; goes into the line. |
 | `coordUrl` | `https://pocket.pocketcli.net` | Where `GET /v2/whoami` is asked. |
 | `basePath` | `""` | A prefix such as `/asr` before every path. |
-| `dataDir` | `/var/lib/pocket-asr` (`main.mjs`) | Certificate, token hashes, connection line, models, coordination keys and revocations. |
+| `timezone` | `Asia/Shanghai` | Where days and months of speech time start. |
+| `dataDir` | `/var/lib/pocket-asr` (`main.mjs`) | Certificate, token hashes, connection line, models, coordination keys, revocations and speech time used. |
 | `auth.tokens` | `[]` | `[{label, sha256}]`: tokens in the config (hash only, `node src/cli.mjs token`), in addition to the data directory's. |
 | `auth.ticket` | off | Pocket tickets, below. |
 | `engines`, `default` | local engine | See [Engines and models](#engines-and-models). |
@@ -236,6 +238,12 @@ Optional. The file comes from `--config <file>`, else `ASR_CONFIG`, else `/etc/p
 | `concurrent` | 8 (default engine: 1 or 2 by memory) | engine calls at once |
 | `uploads` | 16 | request bodies being received at once |
 | `silencePeak` | 64 | recordings quieter than this everywhere are answered `empty` without calling an engine (0 = off) |
+| `dayMinutes`, `monthMinutes` | 120, 1500 | minutes of audio per caller per day and per month (0 = no cap). A Pocket ticket may set its own. |
+
+**Speech time.** Every recognition that reaches an engine counts its audio length, whatever the result. When a caller's
+minutes for the day or the month are used up, the gateway answers `429 quota` with `Retry-After` and a sentence in
+Chinese and English, until the next day or month. The figures are kept in `<dataDir>/usage.json` (callers only as
+hashes), so a restart doesn't reset them.
 
 **Authentication** takes one of two forms.
 
@@ -287,7 +295,7 @@ npm test            # or node --test: protocol vectors, WAV rules, auth, limits,
 
 **HTTP API** ([ASR.md](protocol/ASR.md) has the full contract):
 
-- `GET /v1/info` (public): service, version, gateway id, engines, auth methods and limits.
+- `GET /v1/info` (public): service, version (major.minor), gateway id, engines, auth methods and limits.
 - `POST /v1/recognize?lang=zh|en|auto&engine=<id>` with a WAV body (PCM, 16 kHz, mono, 16-bit) and
   `Content-Type: audio/wav`. Success is 200 with `ok: true`, `text`, `lang`, `engine`, `seconds` and `ms`; an error
   has `ok: false`, `code` (below) and `message`.
@@ -302,6 +310,7 @@ npm test            # or node --test: protocol vectors, WAV rules, auth, limits,
 | `empty` | 422 | nothing was said (silence, under 0.1 s, or the engine heard nothing) |
 | `unauthorized` | 401 | missing or invalid token, ticket or proof |
 | `rate` | 429 | this caller is over its per-minute or at-once limit (`Retry-After`) |
+| `quota` | 429 | this caller's minutes for the day or month are used up (`Retry-After`; `zh` and `en` say so) |
 | `busy` | 503 | the gateway (or the provider) is at capacity (`Retry-After`) |
 | `no-engine` | 400 | no engine for this language (or the named engine doesn't do it) |
 | `engine-error` | 502 | the engine failed (details only in the operator's log) |

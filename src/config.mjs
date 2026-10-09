@@ -16,7 +16,10 @@ export const DEFAULT_LIMITS = {
   concurrent: 8,
   uploads: 16,          // request bodies being received at once (memory bound)
   silencePeak: 64,      // recordings whose loudest sample is below this are answered `empty` without an engine
+  dayMinutes: 120,      // speech time per caller per day, unless its ticket says otherwise (0 = no cap; quota.mjs)
+  monthMinutes: 1500,   // … per month
 }
+export const DEFAULT_TIMEZONE = 'Asia/Shanghai'   // where days and months of speech time start
 
 const GATEWAY_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 export const DEFAULT_PORT = 8444                  // next to pocket-relay's 8443 on the same server
@@ -88,6 +91,8 @@ export function loadConfig(raw, env = process.env) {
   }
   const coordUrl = c.coordUrl ?? DEFAULT_COORD_URL
   if (typeof coordUrl !== 'string' || !/^https?:\/\/[^/]/.test(coordUrl)) throw new Error('config: coordUrl must be http(s)://…')
+  const timezone = c.timezone ?? DEFAULT_TIMEZONE
+  try { if (typeof timezone !== 'string') throw 0; new Intl.DateTimeFormat('en-CA', { timeZone: timezone }) } catch { throw new Error(`config: timezone ${JSON.stringify(timezone)} is not an IANA time zone such as "Asia/Shanghai"`) }
 
   const auth = c.auth || {}
   const tokens = auth.tokens || []
@@ -139,6 +144,7 @@ export function loadConfig(raw, env = process.env) {
     tls,
     publicUrl,
     coordUrl,
+    timezone,
     basePath: c.basePath || '',
     dataDir: c.dataDir || null,
     auth: { tokens, ticket },

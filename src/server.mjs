@@ -21,13 +21,16 @@ import { Auth } from './auth.mjs'
 import { TokenStore } from './tokens.mjs'
 import { prepareTls } from './tls.mjs'
 import { Limiter } from './limits.mjs'
+import { SpeechTime } from './quota.mjs'
 import { parseWav, pcmToWav, peakAbs } from './wav.mjs'
 import { AsrError, cleanDetail } from './errors.mjs'
 import { tidyText, charCount } from './text.mjs'
 import { isAbort } from './lib/http.mjs'
 import { PocketError } from './pcrypto.mjs'
 
-export const VERSION = '1.1.0'
+export const VERSION = '1.1.1'
+// what /v1/info says: major.minor only, so the exact build is not advertised (`--version` prints the full one)
+export const PUBLIC_VERSION = VERSION.split('.').slice(0, 2).join('.')
 const MAX_REVOCATION_DOC = 1024 * 1024
 // Revocation documents are signed, but checking one costs a JSON parse of up to 1 MiB plus a signature check: cap the
 // rate (whole gateway) so a public /v1/revocations cannot be used to burn CPU. Coordination pushes a few per minute.
@@ -65,6 +68,9 @@ export function createGateway(rawConfig, opts = {}) {
   }
   const limiter = new Limiter(config.limits, now)
   const limits = config.limits
+  // speech time per caller per day and month (ASR.md §6): from the account's newest ticket, else these limits
+  const speech = new SpeechTime({ timezone: config.timezone, dayMinutes: limits.dayMinutes, monthMinutes: limits.monthMinutes,
+    dataDir: config.dataDir, now, log: (m) => log(`${stamp()} ${m}`) })
   let uploads = 0
 
   // the engine that answers each language when the request names none (configured default, else the first that fits)
@@ -72,7 +78,7 @@ export function createGateway(rawConfig, opts = {}) {
   const defaultsFor = (id) => Object.entries(effective).filter(([, e]) => e === id).map(([l]) => l)
   const info = () => ({
     service: 'pocket-asr',
-    version: VERSION,
+    version: PUBLIC_VERSION,
     gatewayId: config.gatewayId,
     engines: [...engines.values()].map((e) => {
       const d = defaultsFor(e.id)
@@ -147,6 +153,8 @@ export function createGateway(rawConfig, opts = {}) {
 
       const who = auth.checkHeaders(req.headers)
       f.caller = who.caller
+      speech.observe(who)
+      speech.check(who)                                  // time used up: refused before the audio is read
       const cl = req.headers['content-length']
       if (cl !== undefined && !(Number(cl) <= limits.maxBytes)) throw new AsrError('too-large', 'content-length')
       releaseCaller = limiter.enterCaller(who.caller)
@@ -170,6 +178,11 @@ export function createGateway(rawConfig, opts = {}) {
       if (w.seconds > engine.maxSeconds) throw new AsrError('too-long', `engine-max-${engine.maxSeconds}`)
       releaseEngine = limiter.enterEngine()
       if (!releaseEngine) throw new AsrError('busy', 'concurrent', { retryAfter: 2 })
+      // once more (a request of the same caller may have used the time up meanwhile), then the audio counts: every
+      // recognition that reaches an engine, whatever comes back, so cutting the connection or failing on purpose
+      // does not buy engine time
+      speech.check(who)
+      speech.charge(who, w.seconds)
 
       const deadline = AbortSignal.timeout(opts.deadlineMs ?? 30_000 + Math.ceil(w.seconds * 1000))   // ASR.md §2
       const signal = AbortSignal.any([gone.signal, deadline])
@@ -267,7 +280,7 @@ export function createGateway(rawConfig, opts = {}) {
   sweeper.unref?.()
 
   return {
-    config, engines, auth, limiter, handler, info, tokenStore,
+    config, engines, auth, limiter, speech, handler, info, tokenStore,
     /** How it serves: { mode: off|files|self, pin, selfIssued, … } (after listen(), or when given in opts.tls). */
     get tls() { return tls },
     /** Start listening; resolves with the bound address. */
@@ -280,6 +293,7 @@ export function createGateway(rawConfig, opts = {}) {
       server.requestTimeout = 300_000
       server.keepAliveTimeout = 5_000
       auth.start()
+      speech.start()
       return new Promise((resolve, reject) => {
         server.once('error', reject)
         server.listen(port, host, () => { server.off('error', reject); resolve(server.address()) })
@@ -289,6 +303,7 @@ export function createGateway(rawConfig, opts = {}) {
     async close() {
       clearInterval(sweeper)
       auth.stop()
+      speech.close()
       if (!server) return
       await new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections?.() })
     },

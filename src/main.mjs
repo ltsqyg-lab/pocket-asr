@@ -19,6 +19,8 @@
 //   ASR_PUBLIC_URL  publicUrl    (default: the Pocket coordination server tells us our IP, GET /v2/whoami)
 //   ASR_TLS         tls          auto | self | off
 //   ASR_COORD_URL   coordUrl     (default https://pocket.pocketcli.net)
+//   ASR_DAY_MINUTES, ASR_MONTH_MINUTES   limits.dayMinutes / monthMinutes: speech time per caller (default 120 / 1500;
+//                   0 = no cap)
 //   ASR_SHERPA_BIN  the sherpa-onnx-offline program for the default local engine (else the image's, else installed)
 //
 // License: AGPL-3.0-only.
@@ -100,6 +102,12 @@ export function rawConfig(file, env) {
     raw.tls = env.ASR_TLS
   }
   if (env.ASR_COORD_URL) raw.coordUrl = env.ASR_COORD_URL
+  for (const [name, key] of [['ASR_DAY_MINUTES', 'dayMinutes'], ['ASR_MONTH_MINUTES', 'monthMinutes']]) {
+    if (env[name] === undefined || env[name] === '') continue
+    const n = Number(env[name])
+    if (!Number.isFinite(n) || n < 0) throw new Error(`${name} must be a number of minutes (0 = no cap)`)
+    raw.limits = { ...(raw.limits || {}), [key]: n }
+  }
   return raw
 }
 

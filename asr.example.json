@@ -22,5 +22,7 @@
   ],
   "default": { "zh": "local", "en": "openai", "auto": "local" },
 
-  "limits": { "maxBytes": 8388608, "maxSeconds": 240, "perMinute": 12, "concurrentPerCaller": 2, "concurrent": 2 }
+  "timezone": "Asia/Shanghai",
+  "limits": { "maxBytes": 8388608, "maxSeconds": 240, "perMinute": 12, "concurrentPerCaller": 2, "concurrent": 2,
+              "dayMinutes": 120, "monthMinutes": 1500 }
 }

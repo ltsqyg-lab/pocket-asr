@@ -163,6 +163,7 @@ node src/cli.mjs transcribe asr.json sample.wav zh                 # 用配置�
 | `ASR_PUBLIC_URL` | `publicUrl` | 问协调服务器 |
 | `ASR_TLS` | `tls`:`auto`、`self` 或 `off` | `auto` |
 | `ASR_COORD_URL` | `coordUrl` | `https://pocket.pocketcli.net` |
+| `ASR_DAY_MINUTES`、`ASR_MONTH_MINUTES` | `limits.dayMinutes`、`limits.monthMinutes` | `120`、`1500` |
 | `ASR_SHERPA_BIN` | 默认引擎的程序 | 镜像里的,否则装进数据目录 |
 
 | 设置 | 默认 | |
@@ -173,7 +174,8 @@ node src/cli.mjs transcribe asr.json sample.wav zh                 # 用配置�
 | `publicUrl` | `null` | 手机用的 `https://<主机>[:<端口>][/<路径>]`,写进那一行。 |
 | `coordUrl` | `https://pocket.pocketcli.net` | 去哪里问 `GET /v2/whoami`。 |
 | `basePath` | `""` | 所有路径前的前缀,比如 `/asr`。 |
-| `dataDir` | `/var/lib/pocket-asr`(`main.mjs`) | 证书、令牌哈希、那一行、模型、协调公钥和撤销名单。 |
+| `timezone` | `Asia/Shanghai` | 识别时长按哪个时区算日、月。 |
+| `dataDir` | `/var/lib/pocket-asr`(`main.mjs`) | 证书、令牌哈希、那一行、模型、协调公钥、撤销名单和用掉的识别时长。 |
 | `auth.tokens` | `[]` | `[{label, sha256}]`:写在配置里的令牌(只存哈希,`node src/cli.mjs token` 生成),和数据目录里的一起生效。 |
 | `auth.ticket` | 关 | Pocket 票据,见下。 |
 | `engines`、`default` | 本地引擎 | 见[引擎与模型](#引擎与模型)。 |
@@ -188,6 +190,9 @@ node src/cli.mjs transcribe asr.json sample.wav zh                 # 用配置�
 | `concurrent` | 8(默认引擎:按内存 1 或 2) | 同时调用引擎的次数 |
 | `uploads` | 16 | 同时在接收的请求体 |
 | `silencePeak` | 64 | 整段都比这个安静的录音直接回 `empty`,不调用引擎(0 = 关) |
+| `dayMinutes`、`monthMinutes` | 120、1500 | 每个调用方每天、每月能识别多少分钟的录音(0 = 不限)。Pocket 票据可以自带上限。 |
+
+**识别时长。** 只要录音交给了引擎就按它的长度计,不管结果如何。某个调用方当天或当月的分钟数用完后,网关回 `429 quota`,带 `Retry-After` 和中英文各一句说明,到第二天或下个月恢复。用量记在 `<dataDir>/usage.json`(调用方只存哈希),重启不清零。
 
 **认证**有两种。
 
@@ -222,7 +227,7 @@ npm test            # 或 node --test:协议向量、WAV 规则、认证、限�
 
 **HTTP 接口**(完整约定见 [ASR.md](protocol/ASR.md)):
 
-- `GET /v1/info`(公开):服务名、版本、网关 ID、引擎、认证方式和限制。
+- `GET /v1/info`(公开):服务名、版本(只到小版本,比如 1.1)、网关 ID、引擎、认证方式和限制。
 - `POST /v1/recognize?lang=zh|en|auto&engine=<id>`,请求体是 WAV 文件(PCM,16 kHz,单声道,16 位),`Content-Type: audio/wav`。成功回 200,带 `ok: true`、`text`、`lang`、`engine`、`seconds`、`ms`;出错带 `ok: false`、`code`(见下表)和 `message`。
 - `POST /v1/revocations`:Pocket 协调密钥签名的撤销名单(只在票据认证时有)。
 - `GET /healthz`:回 `{"ok": true}`。
@@ -235,6 +240,7 @@ npm test            # 或 node --test:协议向量、WAV 规则、认证、限�
 | `empty` | 422 | 没说话(静音、不到 0.1 秒,或引擎什么都没听到) |
 | `unauthorized` | 401 | 缺少或无效的令牌 / 票据 / 签名 |
 | `rate` | 429 | 这个调用方超过每分钟或同时的上限(带 `Retry-After`) |
+| `quota` | 429 | 这个调用方当天或当月的识别时长用完了(带 `Retry-After`,`zh` 和 `en` 里有说明) |
 | `busy` | 503 | 网关(或服务商)满了(带 `Retry-After`) |
 | `no-engine` | 400 | 没有支持这个语言的引擎(或指定的引擎不支持) |
 | `engine-error` | 502 | 引擎出错(细节只在运维日志里) |
