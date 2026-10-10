@@ -10,7 +10,7 @@ recognition engine you choose: a model on your own server, or a cloud service wi
 
 You need a server with a public IP running Ubuntu or Debian (x86_64 or arm64, systemd). One command installs this
 speech service and [pocket-relay](https://github.com/pocketcli-app/pocket-relay) together, with no domain and no
-certificate to buy or renew
+certificate to buy or renew:
 
 ```sh
 # international edition
