@@ -6,6 +6,26 @@ The speech-to-text gateway for [Pocket](https://pocket.pocketcli.net). It puts o
 recognition engine you choose: a model on your own server, or a cloud service with your own keys. It returns text and
 **stores neither the audio nor the text.** Node.js 22 or later, no npm dependencies, AGPL-3.0-only.
 
+## The easiest way: your own computer
+
+No server needed. If Pocket is installed on your Mac or Windows PC, that computer can turn your voice into text.
+
+1. On the computer, click the Pocket icon in the menu bar (Mac) or the notification area (Windows) and choose
+   **Install Speech Recognition (180 MB)…**. You do this once: the speech model and the recognition program (about
+   180 MB in all) usually install in about a minute, and the menu shows the progress.
+2. In the Pocket app, go to **Settings → Voice transcription**, choose **My computer** and tap **OK**.
+
+<p align="center"><img src="docs/images/my-computer-en.png" width="300" alt="Voice transcription in the Pocket app, with My computer selected"></p>
+
+- **Who it's for:** anyone who doesn't want to run a server. You don't need this repository, which is for running a
+  speech service on your own server (below).
+- **What you need:** the Pocket desktop app on the computer, paired with your phone. macOS (Apple silicon or Intel) or
+  Windows (x64).
+- **Privacy:** recordings go only between your phone and your computer, end-to-end encrypted. The computer doesn't keep
+  them, and the text goes into the session as if you had typed it.
+- **Limits:** the computer must be on and online. When it isn't, the option is greyed out in the app with the reason.
+  Chinese and English.
+
 ## One-command install (recommended)
 
 You need a server with a public IP running Ubuntu or Debian (x86_64 or arm64, systemd). One command installs this
