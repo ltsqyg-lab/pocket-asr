@@ -17,9 +17,21 @@ export function platformKey(platform = process.platform, arch = process.arch) { 
 
 const exists = (p) => { try { fs.statSync(p); return true } catch { return false } }
 
-/** Candidate URLs: every mirror base + the file name, then the upstream URL. */
-export function urlsFor(entry, mirrors = []) {
-  return [...mirrors.filter(Boolean).map((m) => m.replace(/\/*$/, '/') + encodeURIComponent(entry.file)), entry.url].filter(Boolean)
+/** Candidate URLs: every mirror base + the file name, then the upstream URL (unless `upstream` is false). */
+export function urlsFor(entry, mirrors = [], { upstream = true } = {}) {
+  return [...mirrors.filter(Boolean).map((m) => m.replace(/\/*$/, '/') + encodeURIComponent(entry.file)), upstream ? entry.url : null].filter(Boolean)
+}
+
+/**
+ * Where to download from: an edition's mirrors and whether the upstream URL may be tried (models.json `editions`;
+ * ASR.md §11.5). No edition: the manifest's mirrors, then upstream (as before editions existed). Mirrors given by the
+ * caller (an engine's `install.mirrors`) replace the edition's, but the mainland China edition still never goes upstream.
+ */
+export function sources(manifest, { edition = null, mirrors = null } = {}) {
+  if (!edition) return { mirrors: mirrors ?? manifest.mirrors ?? [], upstream: true }
+  const e = manifest.editions?.[edition]
+  if (!e || typeof e !== 'object' || !Array.isArray(e.mirrors)) throw new Error(`unknown edition "${edition}" (models.json editions)`)
+  return { mirrors: mirrors ?? e.mirrors, upstream: e.upstream !== false }
 }
 
 /**
@@ -95,7 +107,7 @@ function payloadDir(dir) {
  * Install model `id` at `target` (a directory for archives, a file path for single-file models such as ggml).
  * Does nothing when `target` already exists.
  */
-export async function installModel(id, target, { manifest = loadManifest(), mirrors, log = () => {}, signal, fetchImpl, allowUnverified, onProgress } = {}) {
+export async function installModel(id, target, { manifest = loadManifest(), mirrors, edition, log = () => {}, signal, fetchImpl, allowUnverified, onProgress } = {}) {
   const m = manifest.models?.[id]
   if (!m) throw new Error(`unknown model "${id}"`)
   if (exists(target)) return target
@@ -105,7 +117,8 @@ export async function installModel(id, target, { manifest = loadManifest(), mirr
   try {
     const file = path.join(work, path.basename(m.file))
     log(`downloading ${id} (${Math.round(m.size / 1048576)} MB)`)
-    await downloadVerified({ urls: urlsFor(m, mirrors ?? manifest.mirrors), sha256: m.sha256, size: m.size, dest: file, signal, fetchImpl, allowUnverified, onProgress })
+    const src = sources(manifest, { edition, mirrors })
+    await downloadVerified({ urls: urlsFor(m, src.mirrors, src), sha256: m.sha256, size: m.size, dest: file, signal, fetchImpl, allowUnverified, onProgress })
     if (!m.archive) {
       fs.renameSync(file, target)
     } else {
@@ -123,7 +136,7 @@ export async function installModel(id, target, { manifest = loadManifest(), mirr
 /**
  * Install an engine program for this platform into destDir; returns the program path.
  */
-export async function installEngine(engine, destDir, { manifest = loadManifest(), platform = platformKey(), mirrors, log = () => {}, signal, fetchImpl, allowUnverified, onProgress } = {}) {
+export async function installEngine(engine, destDir, { manifest = loadManifest(), platform = platformKey(), mirrors, edition, log = () => {}, signal, fetchImpl, allowUnverified, onProgress } = {}) {
   const b = manifest.engines?.[engine]?.binaries?.[platform]
   if (!b) throw new Error(`no prebuilt ${engine} for ${platform}: ${manifest.engines?.[engine]?.howto || 'build it from source'}`)
   const bin = path.join(destDir, b.bin)
@@ -134,7 +147,8 @@ export async function installEngine(engine, destDir, { manifest = loadManifest()
   try {
     const file = path.join(work, path.basename(b.file))
     log(`downloading ${engine} ${platform} (${Math.round(b.size / 1048576)} MB)`)
-    await downloadVerified({ urls: urlsFor(b, mirrors ?? manifest.mirrors), sha256: b.sha256, size: b.size, dest: file, signal, fetchImpl, allowUnverified, onProgress })
+    const src = sources(manifest, { edition, mirrors })
+    await downloadVerified({ urls: urlsFor(b, src.mirrors, src), sha256: b.sha256, size: b.size, dest: file, signal, fetchImpl, allowUnverified, onProgress })
     const out = path.join(work, 'x')
     await extractArchive(file, out, { signal })
     if (exists(destDir)) fs.rmSync(destDir, { recursive: true, force: true })
@@ -153,7 +167,7 @@ export async function installEngine(engine, destDir, { manifest = loadManifest()
  * download it from the manifest (used by the `local` Docker image on first start). `config` is a file path or the
  * config object.
  */
-export async function ensureConfiguredModels(config, { log = () => {}, fetchImpl, onProgress } = {}) {
+export async function ensureConfiguredModels(config, { log = () => {}, fetchImpl, onProgress, edition = config?.edition ?? null } = {}) {
   let raw = config
   if (typeof config === 'string') {
     try { raw = JSON.parse(fs.readFileSync(config, 'utf8')) } catch { return }
@@ -161,7 +175,7 @@ export async function ensureConfiguredModels(config, { log = () => {}, fetchImpl
   for (const e of Array.isArray(raw?.engines) ? raw.engines : []) {
     const id = e?.install?.model
     if (!id || typeof e.model !== 'string' || exists(e.model)) continue
-    await installModel(id, e.model, { log, fetchImpl, mirrors: e.install.mirrors, onProgress })
+    await installModel(id, e.model, { log, fetchImpl, mirrors: e.install.mirrors, edition, onProgress })
   }
 }
 

@@ -147,16 +147,19 @@ export const PLACEHOLDER_HOST = '<this-server-public-IP>'
  * connect.txt gets).
  * @returns {{ line: string, bare: string, text: string }}
  */
-export function banner({ pub, tls, token, label, docker = false, cmd = 'node src/main.mjs' }) {
+export function banner({ pub, tls, token, label, docker = false, cmd = 'node src/main.mjs', edition = null }) {
   const host = pub.host || PLACEHOLDER_HOST
   const parts = { host, port: pub.port, path: pub.path, pin: pinFor(tls, pub.host) }
   const line = connectString({ ...parts, token })
   const bare = connectString(parts)
   const run = docker ? `docker exec pocket-asr ${cmd}` : cmd
-  const out = ['', '─'.repeat(72), '', `  ${line}`, '']
+  const out = ['', '─'.repeat(72), '']
+  const ed = { cn: ['mainland China edition', '国内版'], intl: ['international edition', '国际版'] }[edition]
+  if (ed) out.push(`  pocket-asr, ${ed[0]}. 语音服务(${ed[1]})。`, '')
+  out.push(`  ${line}`, '')
   if (token) {
-    out.push('  In the Pocket App: Settings → Voice transcription → My own gateway, paste this line.')
-    out.push('  在 Pocket App:我的 → 语音识别方式 → 自建语音网关,粘贴这一行。', '')
+    out.push('  In the Pocket App: Settings → Voice transcription → Self-hosted speech service, paste this line.')
+    out.push('  在 Pocket App:我的 → 语音识别方式 → 自建语音服务,粘贴这一行。', '')
     out.push(`  The token in it (${label}) is shown only this once: only its hash is stored. Another one: ${run} new-token [label]`)
     out.push(`  其中的令牌(${label})只显示这一次,数据目录里只存了它的哈希。再要一个:${run} new-token [标签]`)
   } else {

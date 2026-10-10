@@ -25,6 +25,23 @@ const GATEWAY_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 export const DEFAULT_PORT = 8444                  // next to pocket-relay's 8443 on the same server
 export const DEFAULT_GATEWAY_ID = 'my-asr'
 export const DEFAULT_COORD_URL = 'https://pocket.pocketcli.net'
+/**
+ * The two Pocket services (ASR.md §11.5). `edition` sets where the gateway asks for its public address (coordUrl) and
+ * where it downloads the speech model and engine program (models.json `editions`): the mainland China edition talks to
+ * nothing outside mainland China. `pub` = each edition's coordination key, so a ticket configuration cannot pin the
+ * other edition's key by mistake.
+ */
+export const EDITIONS = {
+  intl: { coordUrl: DEFAULT_COORD_URL, pub: ['BLv9ISMLeI3tx3arobNAhCeYOFlF7DWmPGHh5zky1v0V2vLMLdeQIoFnJAmRkj_oU9i6Ml0Qoe2-v-xdEeRhqJ0'] },
+  cn: { coordUrl: 'https://api.pocketcli.cn', pub: ['BKhhniVXB9NNhTXSRxobx4SWsho4vLGYCAcU32s9zP9mr-5Fj6_rScKjKmf7Kout2Un2nG1edVuFLngEsgtKUtI'] },
+}
+export const EDITION_NAMES = Object.keys(EDITIONS)
+/** The edition whose coordination server is at this URL (same origin), or null. */
+export function editionOfUrl(url) {
+  let o
+  try { o = new URL(String(url)).origin } catch { return null }
+  return EDITION_NAMES.find((e) => new URL(EDITIONS[e].coordUrl).origin === o) ?? null
+}
 const TLS_WORDS = ['auto', 'self', 'off']
 /** loadConfig's result carries this mark, so createGateway() does not load it a second time. */
 export const LOADED = Symbol.for('pocket-asr.config')
@@ -89,7 +106,13 @@ export function loadConfig(raw, env = process.env) {
     }
     publicUrl = u.href.replace(/\/+$/, '')
   }
-  const coordUrl = c.coordUrl ?? DEFAULT_COORD_URL
+  // the edition: given, or the one whose coordination server coordUrl / auth.ticket.coordUrl names, else international
+  const named = [c.coordUrl, c.auth?.ticket?.coordUrl].map((u) => (u ? editionOfUrl(u) : null)).filter(Boolean)
+  const edition = c.edition ?? named[0] ?? 'intl'
+  if (typeof edition !== 'string' || !EDITIONS[edition]) throw new Error(`config: edition must be ${EDITION_NAMES.map((e) => `"${e}"`).join(' or ')} (ASR_EDITION)`)
+  const other = named.find((e) => e !== edition)
+  if (other) throw new Error(`config: edition "${edition}" but coordUrl / auth.ticket.coordUrl names the coordination server of the "${other}" edition: remove it, or set edition "${other}"`)
+  const coordUrl = c.coordUrl ?? EDITIONS[edition].coordUrl
   if (typeof coordUrl !== 'string' || !/^https?:\/\/[^/]/.test(coordUrl)) throw new Error('config: coordUrl must be http(s)://…')
   const timezone = c.timezone ?? DEFAULT_TIMEZONE
   try { if (typeof timezone !== 'string') throw 0; new Intl.DateTimeFormat('en-CA', { timeZone: timezone }) } catch { throw new Error(`config: timezone ${JSON.stringify(timezone)} is not an IANA time zone such as "Asia/Shanghai"`) }
@@ -109,6 +132,9 @@ export function loadConfig(raw, env = process.env) {
     if (!Array.isArray(ticket.pinnedKeys) || !ticket.pinnedKeys.length) throw new Error('config: auth.ticket.enabled needs pinnedKeys')
     if (!ticket.pinnedKeys.every(checkKeyEntry)) throw new Error('config: a pinned key is malformed ({kid, pub, use, nbf, exp})')
     if (!ticket.pinnedKeys.some((k) => k.use.includes('ticket'))) throw new Error('config: no pinned key may sign tickets (use must include "ticket")')
+    for (const e of EDITION_NAMES.filter((x) => x !== edition)) {
+      if (ticket.pinnedKeys.some((k) => EDITIONS[e].pub.includes(k.pub))) throw new Error(`config: auth.ticket.pinnedKeys holds the key of the "${e}" edition, but this gateway is the "${edition}" edition`)
+    }
     if (ticket.coordUrl !== undefined && !/^https?:\/\//.test(ticket.coordUrl)) throw new Error('config: auth.ticket.coordUrl must be http(s)://…')
     if (ticket.accounts !== undefined && (!Array.isArray(ticket.accounts) || ticket.accounts.some((a) => typeof a !== 'string' || !a))) {
       throw new Error('config: auth.ticket.accounts must be a list of account ids or ["*"]')
@@ -139,6 +165,7 @@ export function loadConfig(raw, env = process.env) {
 
   return {
     [LOADED]: true,
+    edition,
     gatewayId,
     listen,
     tls,

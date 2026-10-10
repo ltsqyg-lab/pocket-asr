@@ -4,27 +4,58 @@
 
 [Pocket](https://pocket.pocketcli.net) 的语音识别网关。它是一个 HTTPS 接口,后面接你选的识别引擎:跑在你自己服务器上的模型,或者用你自己 Key 的云服务。它只回文字,**录音和文字都不保存。** Node.js 22 以上,不依赖任何 npm 包,许可是 AGPL-3.0-only。
 
-## 不用域名部署(推荐)
+## 一条命令部署(推荐)
 
-要一台有公网 IP 的服务器和 Docker。和 Tailscale 的 DERP 服务器一样,不用域名,也不用买证书、续证书:网关自己生成自签证书,App 按指纹钉住它。
+要一台有公网 IP 的 Ubuntu 或 Debian 服务器(x86_64 或 arm64,systemd)。这条命令把语音服务和[中继 pocket-relay](https://github.com/pocketcli-app/pocket-relay)一起装好,不用域名,也不用买证书、续证书:
 
 ```sh
-git clone https://github.com/ltsqyg-lab/pocket-asr && cd pocket-asr
-docker build -t pocket-asr .
-docker run -d --name pocket-asr --restart unless-stopped -p 8444:8444 -v pocket-asr:/var/lib/pocket-asr pocket-asr
-docker logs -f pocket-asr
+# 国内版(用国内版 Pocket App 的,一般选这个)
+curl -fsSL https://api.pocketcli.cn/dl/selfhost/install.sh | sudo bash
+
+# 国际版
+curl -fsSL https://pocket.pocketcli.net/dl/selfhost/install.sh | sudo bash
+
+# 只装语音服务
+curl -fsSL https://api.pocketcli.cn/dl/selfhost/install.sh | sudo bash -s -- --asr-only
 ```
 
-第一次启动时,网关下载语音模型(约 160 MB,按 SHA-256 核对),生成证书和一个令牌,然后打印这样一行:
+脚本在需要时装好 Node.js 22,每个下载都按 SHA-256 核对,以 `pocket-asr` 服务常驻,等语音模型下载完(约 190 MB,只在第一次),最后打印这样一行:
 
 ```
   pocket-asr://203.0.113.7:8444?pin=sha256:3c9f…e41b&token=pXq…7Kd
 ```
 
-1. 在 Pocket App 里打开 **我的 → 语音识别方式 → 自建语音网关**,粘贴这一行。
-2. 在服务器的防火墙和安全组里放行 **TCP 8444**(云服务器控制台默认是关的)。
+1. 在 Pocket App 里打开 **我的 → 语音识别方式 → 自建语音服务**,粘贴这一行。
+2. 在云服务器控制台的防火墙 / 安全组里放行 **TCP 8444**(默认是关的;机器上开着 ufw 时脚本已经放行)。
 
-`pin` 是网关证书的 SHA-256,App 只认这一张证书,中间谁也冒充不了网关。`token` 是让手机进门的令牌,**只显示这一次**(数据目录里只存哈希);丢了,或者想每台手机一个,跑 `docker exec pocket-asr node src/main.mjs new-token "我的 iPad"` 打印新的一行(见[运维](#运维))。
+这一行里的访问密钥(`token`)**只显示这一次**,数据目录里只存哈希,日志里也没有。丢了,或者想每台手机一个,运行 `sudo pocket-asr new-token "我的 iPad"`。升级 = 重新运行同一条命令(证书、访问密钥、模型都保留);卸载:`… | sudo bash -s -- --uninstall`。自己的设置写在 `/etc/pocket-asr/env`(例如 `ASR_PUBLIC_URL=https://203.0.113.7:8444`),改完 `systemctl restart pocket-asr`。照下面的办法手动装过的(`/opt/pocket-asr`、服务名 `pocket-asr`、数据在 `/var/lib/pocket-asr`),脚本会接管,数据不丢。
+
+**国内版和国际版。** Pocket 分国内版(`api.pocketcli.cn`)和国际版(`pocket.pocketcli.net`)两套服务。国内版(`ASR_EDITION=cn`)只向 `https://api.pocketcli.cn` 查公网地址,语音模型和识别程序只从 `https://api.pocketcli.cn/dl/asr/` 下载,不试 GitHub、Hugging Face,除了你自己配的云端引擎,不连任何境外地址。那里放着默认模型和 Linux 版 sherpa-onnx,其他模型要自己下载放进去。国际版(`ASR_EDITION=intl`,默认)先试 `https://pocket.pocketcli.net/dl/asr/`,再试原地址。
+
+`pin` 是网关证书的 SHA-256,App 只认这一张证书,中间谁也冒充不了网关。`token` 是让手机进门的访问密钥。
+
+**服务器配置。** 默认引擎用服务器自己的 CPU,磁盘约占 0.3 GB。每个正在识别的请求约占 0.5 GB 内存(内存不到 1.8 GB 时一次识别一个,否则两个)。一个人用 1 核 1 GB 就够,一句话几秒出字。机器再小,就用云端引擎和 `slim` 镜像(见[引擎与模型](#引擎与模型))。
+
+## 其他部署方式
+
+### Docker
+
+```sh
+curl -fsSL https://api.pocketcli.cn/dl/selfhost/install.sh | sudo bash -s -- --docker /opt/pocket-docker   # 国际版换成 pocket.pocketcli.net
+cd /opt/pocket-docker && docker compose up -d --build        # 中继和语音服务一起起;版本写在 .env 里
+docker compose logs -f pocket-asr
+```
+
+或者直接从仓库构建:
+
+```sh
+git clone https://github.com/pocketcli-app/pocket-asr && cd pocket-asr
+docker build -t pocket-asr .                    # 国内版:--build-arg ASR_EDITION=cn --build-arg APT_MIRROR=mirrors.aliyun.com
+docker run -d --name pocket-asr --restart unless-stopped -p 8444:8444 -v pocket-asr:/var/lib/pocket-asr pocket-asr
+docker logs -f pocket-asr
+```
+
+第一次启动时,网关下载语音模型(约 160 MB,按 SHA-256 核对),生成证书和一个令牌,然后打印那一行(用 Docker 时令牌会留在 `docker logs` 里,介意就作废它、再要一个)。国内拉 Docker Hub 的基础镜像(`node:22`)很慢甚至拉不下来,要先给 Docker 配镜像加速器,或者用上面的一条命令部署。
 
 网关问 Pocket 协调服务器「我的请求从哪个 IP 来」。问不到或者不对(比如在 NAT 后面)时,这一行里是 `<this-server-public-IP>`,旁边会说明。把它换掉,或者设好地址重启:
 
@@ -34,16 +65,14 @@ docker run … -e ASR_PUBLIC_URL=https://203.0.113.7:8444 … pocket-asr
 
 映射到别的端口(`-p 443:8444`)时也要设:`-e ASR_PUBLIC_URL=https://203.0.113.7:443`。
 
-**服务器配置。** 默认引擎用服务器自己的 CPU,磁盘约占 0.3 GB。每个正在识别的请求约占 0.5 GB 内存(内存不到 1.8 GB 时一次识别一个,否则两个)。一个人用 1 核 1 GB 就够,一句话几秒出字。机器再小,就用云端引擎和 `slim` 镜像(见[引擎与模型](#引擎与模型))。
+### 不用 Docker、不用脚本
 
-**和 pocket-relay 放在同一台服务器上。** [pocket-relay](https://github.com/ltsqyg-lab/pocket-relay) 用 8443,pocket-asr 用 8444,两个端口都放行就行,各自打印给 App 的那一行。
-
-**不用 Docker**(Node.js 22 以上;Linux x64 或 arm64(glibc),或 macOS):
+Node.js 22 以上;Linux x64 或 arm64(glibc),或 macOS:
 
 ```sh
-git clone https://github.com/ltsqyg-lab/pocket-asr /opt/pocket-asr
+git clone https://github.com/pocketcli-app/pocket-asr /opt/pocket-asr
 sudo useradd --system --create-home --home-dir /var/lib/pocket-asr pocket-asr
-sudo -u pocket-asr node /opt/pocket-asr/src/main.mjs       # 第一次启动:复制那一行,然后 Ctrl-C
+sudo -u pocket-asr node /opt/pocket-asr/src/main.mjs       # 第一次启动:复制那一行,然后 Ctrl-C(国内版加 ASR_EDITION=cn)
 ```
 
 第一次启动还会把 sherpa-onnx 程序(约 30 MB)装进数据目录。要让它常驻,把下面这段存成 `/etc/systemd/system/pocket-asr.service`,再跑 `systemctl enable --now pocket-asr`(那一行在 `journalctl -u pocket-asr` 里):
@@ -65,7 +94,7 @@ WantedBy=multi-user.target
 
 [运维](#运维)里的命令用同一个用户跑:`sudo -u pocket-asr node /opt/pocket-asr/src/main.mjs new-token`。换数据目录就设 `ASR_DATA_DIR=/路径`,服务和命令都要带。
 
-## 有域名时
+### 有域名时
 
 **前面套反向代理**(有域名时最省事)。Caddy 自己申请、续期证书:
 
@@ -92,7 +121,7 @@ Pocket 的语音有四种识别方式,这个网关负责其中两种:
 |---|---|
 | 官方云端 | 手机 → 官方网关(就是这份代码,Pocket 运行)→ 云端识别服务 |
 | 我的电脑 | 手机 →(端到端加密)→ 你的电脑,用本仓库同一套本地引擎识别(`src/engines/local.mjs`) |
-| **自建语音网关** | 手机 → **你的** pocket-asr → 你配置的引擎 |
+| **自建语音服务** | 手机 → **你的** pocket-asr → 你配置的引擎 |
 | 手机本机 | 不出手机(iOS / Android 系统自带的离线识别) |
 
 - 录音和文字只在这一次请求的内存里。本地引擎用一个临时文件,回答之前就删掉。
@@ -150,7 +179,7 @@ node src/cli.mjs check asr.json                                    # 检查配�
 node src/cli.mjs transcribe asr.json sample.wav zh                 # 用配置的引擎识别一个文件
 ```
 
-下载先试 Pocket 的镜像(`https://pocket.pocketcli.net/dl/asr/`),再试原地址。两边都连不上时走代理:`NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://<代理> node src/main.mjs`(Node 22 自带的代理支持);构建镜像时用 `docker build --build-arg HTTPS_PROXY=http://<代理> …`。
+下载先试 Pocket 的镜像(`https://pocket.pocketcli.net/dl/asr/`),再试原地址;国内版(`ASR_EDITION=cn`)只从 `https://api.pocketcli.cn/dl/asr/` 下载(那里有默认模型和 Linux 版程序)。两边都连不上时走代理:`NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://<代理> node src/main.mjs`(Node 22 自带的代理支持);构建镜像时用 `docker build --build-arg HTTPS_PROXY=http://<代理> …`。
 
 ## 配置
 
@@ -162,7 +191,8 @@ node src/cli.mjs transcribe asr.json sample.wav zh                 # 用配置�
 | `ASR_PORT` | `listen.port` | `8444` |
 | `ASR_PUBLIC_URL` | `publicUrl` | 问协调服务器 |
 | `ASR_TLS` | `tls`:`auto`、`self` 或 `off` | `auto` |
-| `ASR_COORD_URL` | `coordUrl` | `https://pocket.pocketcli.net` |
+| `ASR_EDITION` | `edition`:`intl` 或 `cn`(国内版) | `intl` |
+| `ASR_COORD_URL` | `coordUrl` | 按版本:`https://pocket.pocketcli.net` / `https://api.pocketcli.cn` |
 | `ASR_DAY_MINUTES`、`ASR_MONTH_MINUTES` | `limits.dayMinutes`、`limits.monthMinutes` | `120`、`1500` |
 | `ASR_SHERPA_BIN` | 默认引擎的程序 | 镜像里的,否则装进数据目录 |
 
@@ -172,7 +202,8 @@ node src/cli.mjs transcribe asr.json sample.wav zh                 # 用配置�
 | `listen.host`、`listen.port` | `null`(所有地址)、`8444` | |
 | `tls` | `"auto"` | `"auto"`:自己的证书,只听回环时(本机有代理)用明文 HTTP。`"self"`:自己的证书。`"off"` / `null`:明文 HTTP,前面是你的 HTTPS 代理。`{"cert", "key"}`:PEM 文件。 |
 | `publicUrl` | `null` | 手机用的 `https://<主机>[:<端口>][/<路径>]`,写进那一行。 |
-| `coordUrl` | `https://pocket.pocketcli.net` | 去哪里问 `GET /v2/whoami`。 |
+| `edition` | `intl` | `cn`:国内版(协调服务器、下载镜像,见[一条命令部署](#一条命令部署推荐))。`coordUrl` 或 `auth.ticket` 写的是另一版的服务器或公钥时启动报错。 |
+| `coordUrl` | 按版本 | 去哪里问 `GET /v2/whoami`。 |
 | `basePath` | `""` | 所有路径前的前缀,比如 `/asr`。 |
 | `timezone` | `Asia/Shanghai` | 识别时长按哪个时区算日、月。 |
 | `dataDir` | `/var/lib/pocket-asr`(`main.mjs`) | 证书、令牌哈希、那一行、模型、协调公钥、撤销名单和用掉的识别时长。 |
@@ -201,7 +232,7 @@ node src/cli.mjs transcribe asr.json sample.wav zh                 # 用配置�
 
 ## 运维
 
-用 Docker 时,每条命令前面加 `docker exec pocket-asr`。
+用一条命令部署的,写成 `sudo pocket-asr <命令>`(例如 `sudo pocket-asr new-token`);用 Docker 时,每条命令前面加 `docker exec pocket-asr`。
 
 ```sh
 node src/main.mjs new-token ["标签"]      # 再要一个令牌;打印完整的一行(令牌只在这里出现)
@@ -213,9 +244,9 @@ node src/main.mjs --health                # 网关能应答时退出码为 0(镜
 
 - 正在运行的网关一秒内就认新令牌、拒作废的令牌,不用重启。标签不能重复,不给标签就是 `token-1`、`token-2`……把最后一个令牌也作废后重启,会再生成一个。
 - 那一行也写在 `<dataDir>/connect.txt` 里,但不带令牌,令牌从来不落盘。`docker logs` 留着第一次启动打印的那一行,令牌也在里面,能看这台服务器日志的人就能看到。介意的话作废它、再要一个。
-- 日志:`docker logs pocket-asr`(或 `journalctl -u pocket-asr`),每个请求一行,没有说话的内容。
+- 日志:`journalctl -u pocket-asr`(或 `docker logs pocket-asr`),每个请求一行,没有说话的内容。
 - 证书在 `<dataDir>/self-cert.pem` 和 `self-key.pem`,重启、升级都保留,所以 pin 不变。只有证书坏了、快到期(有效期 10 年)或者公网地址变了,网关才会换一张新的,那时要把新的一行粘进 App(启动时会提示)。
-- 升级:`git pull && docker build -t pocket-asr . && docker rm -f pocket-asr`,再跑同样的 `docker run`。卷里的证书、令牌和模型都在,App 照常能用。
+- 升级:重新运行安装命令;用 Docker 的,换上新程序后 `docker compose up -d --build`(或 `git pull && docker build -t pocket-asr . && docker rm -f pocket-asr` 再跑同样的 `docker run`)。证书、令牌和模型都保留,App 照常能用。
 
 ## 开发与测试
 

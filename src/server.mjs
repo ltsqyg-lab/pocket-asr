@@ -79,6 +79,7 @@ export function createGateway(rawConfig, opts = {}) {
   const info = () => ({
     service: 'pocket-asr',
     version: PUBLIC_VERSION,
+    edition: config.edition,
     gatewayId: config.gatewayId,
     engines: [...engines.values()].map((e) => {
       const d = defaultsFor(e.id)

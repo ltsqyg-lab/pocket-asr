@@ -1,4 +1,5 @@
 {
+  "edition": "intl",
   "gatewayId": "my-asr",
   "listen": { "host": null, "port": 8444 },
   "tls": "auto",

@@ -3,6 +3,11 @@
   "updated": "2026-10-09",
   "about": "Speech models and engine programs pocket-asr and the Pocket desktop agent can install. Every file is checked against its size and SHA-256 before use. `sha256Source`: github-release-digest = the SHA-256 GitHub publishes for the release asset; huggingface-lfs = the LFS object id (SHA-256) Hugging Face publishes; computed = downloaded once over HTTPS and hashed (upstream publishes no checksum). Mirrors are tried first, then the upstream URL; the official mirror is filled when the gateway is released (GitHub is unreachable from mainland China).",
   "mirrors": ["https://pocket.pocketcli.net/dl/asr/"],
+  "editions": {
+    "about": "Where each edition downloads from (ASR_EDITION / config `edition`). intl: the mirror above, then the upstream URL. cn (mainland China): only the mainland mirror, never the upstream URL (nothing outside mainland China); it holds the sherpa-onnx programs for Linux and the default model sense-voice-int8.",
+    "intl": { "mirrors": ["https://pocket.pocketcli.net/dl/asr/"], "upstream": true },
+    "cn": { "mirrors": ["https://api.pocketcli.cn/dl/asr/"], "upstream": false }
+  },
   "engines": {
     "sherpa-onnx": {
       "version": "1.13.8",

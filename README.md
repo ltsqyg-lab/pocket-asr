@@ -6,32 +6,81 @@ The speech-to-text gateway for [Pocket](https://pocket.pocketcli.net). It puts o
 recognition engine you choose: a model on your own server, or a cloud service with your own keys. It returns text and
 **stores neither the audio nor the text.** Node.js 22 or later, no npm dependencies, AGPL-3.0-only.
 
-## Deploy without a domain (recommended)
+## One-command install (recommended)
 
-You need a server with a public IP and Docker. As with Tailscale's DERP servers, there is no domain and no certificate
-to buy or renew: the gateway makes its own self-signed certificate and the app pins it by its fingerprint.
+You need a server with a public IP running Ubuntu or Debian (x86_64 or arm64, systemd). One command installs this
+speech service and [pocket-relay](https://github.com/pocketcli-app/pocket-relay) together, with no domain and no
+certificate to buy or renew:
 
 ```sh
-git clone https://github.com/ltsqyg-lab/pocket-asr && cd pocket-asr
-docker build -t pocket-asr .
-docker run -d --name pocket-asr --restart unless-stopped -p 8444:8444 -v pocket-asr:/var/lib/pocket-asr pocket-asr
-docker logs -f pocket-asr
+# international edition
+curl -fsSL https://pocket.pocketcli.net/dl/selfhost/install.sh | sudo bash
+
+# mainland China edition (for the mainland China edition of the app)
+curl -fsSL https://api.pocketcli.cn/dl/selfhost/install.sh | sudo bash
+
+# only the speech service
+curl -fsSL https://pocket.pocketcli.net/dl/selfhost/install.sh | sudo bash -s -- --asr-only
 ```
 
-On first start the gateway downloads the speech model (about 160 MB, checked against its SHA-256), makes the
-certificate and a token, and prints a line like this:
+The script (its messages are in Chinese) installs Node.js 22 when needed, checks every download against its SHA-256,
+installs the service as `pocket-asr` under systemd, waits for the speech model (about 190 MB, first install only) and
+ends with a line like this:
 
 ```
   pocket-asr://203.0.113.7:8444?pin=sha256:3c9f…e41b&token=pXq…7Kd
 ```
 
-1. In the Pocket app, go to **Settings → Voice transcription → My own gateway** and paste the line.
-2. Allow **TCP 8444** in the server's firewall and security group (cloud consoles block it by default).
+1. In the Pocket app, go to **Settings → Voice transcription → Self-hosted speech service** and paste the line.
+2. Allow **TCP 8444** in your cloud provider's firewall / security group (cloud consoles block it by default; the
+   script opens it in ufw when ufw is on).
+
+The token in the line is shown **only once** (the data directory keeps only its hash, and it is never written to the
+log). For a new one, or one per phone: `sudo pocket-asr new-token "my iPad"`. Upgrade = run the command again (the
+certificate, tokens and model are kept). Uninstall: `… | sudo bash -s -- --uninstall`. Your own settings go in
+`/etc/pocket-asr/env` (for example `ASR_PUBLIC_URL=https://203.0.113.7:8444`); then `systemctl restart pocket-asr`. A
+gateway installed by hand as described below (`/opt/pocket-asr`, service `pocket-asr`, data in `/var/lib/pocket-asr`)
+is taken over with its data.
+
+**Two editions.** Pocket runs two separate services, international (`pocket.pocketcli.net`) and mainland China
+(`api.pocketcli.cn`). The mainland China edition (`ASR_EDITION=cn`) asks only `https://api.pocketcli.cn` for its public
+address and downloads the speech model and engine program only from `https://api.pocketcli.cn/dl/asr/`, never from
+GitHub or Hugging Face: it connects to nothing outside mainland China (besides the cloud engine you configure, if
+any). That mirror holds the default model and the Linux sherpa-onnx programs; other models are installed by hand. The
+international edition (`ASR_EDITION=intl`, the default) tries `https://pocket.pocketcli.net/dl/asr/` first, then the
+upstream URL.
 
 `pin` is the SHA-256 of the gateway's certificate. The app accepts no other certificate, so nobody in between can
-impersonate the gateway. `token` lets your phone in. It is shown **only once** (the data directory keeps only its hash);
-for a new one, or one per phone, run `docker exec pocket-asr node src/main.mjs new-token "my iPad"` to print a new line
-(see [Operations](#operations)).
+impersonate the gateway. `token` lets your phone in.
+
+**Server size.** The default engine runs on the server's CPU and uses about 0.3 GB of disk. Each recognition in
+progress takes about 0.5 GB of memory (one at a time with less than 1.8 GB of memory, two otherwise). 1 vCPU and 1 GB
+is enough for one person, and a sentence takes a few seconds. For a smaller server, use a cloud engine and the
+`slim` image (see [Engines and models](#engines-and-models)).
+
+## Other ways to deploy
+
+### Docker
+
+```sh
+curl -fsSL https://pocket.pocketcli.net/dl/selfhost/install.sh | sudo bash -s -- --docker /opt/pocket-docker   # or api.pocketcli.cn
+cd /opt/pocket-docker && docker compose up -d --build        # pocket-relay and pocket-asr; .env holds the edition
+docker compose logs -f pocket-asr
+```
+
+Or from the repository:
+
+```sh
+git clone https://github.com/pocketcli-app/pocket-asr && cd pocket-asr
+docker build -t pocket-asr .                    # mainland China: --build-arg ASR_EDITION=cn --build-arg APT_MIRROR=mirrors.aliyun.com
+docker run -d --name pocket-asr --restart unless-stopped -p 8444:8444 -v pocket-asr:/var/lib/pocket-asr pocket-asr
+docker logs -f pocket-asr
+```
+
+On first start the gateway downloads the speech model (about 160 MB, checked against its SHA-256), makes the
+certificate and a token, and prints the line (with Docker the token stays in `docker logs`; revoke it and make another
+if that bothers you). From mainland China, pulling `node:22` base images from Docker Hub is slow or fails: configure a
+registry mirror for Docker first, or use the one-command install.
 
 The gateway asks Pocket's coordination server which IP its requests come from. If that fails or gives the wrong
 address (behind NAT, for example), the line shows `<this-server-public-IP>` and says so. Replace it, or set the address
@@ -43,20 +92,14 @@ docker run … -e ASR_PUBLIC_URL=https://203.0.113.7:8444 … pocket-asr
 
 If you publish another port (`-p 443:8444`), set that as well: `-e ASR_PUBLIC_URL=https://203.0.113.7:443`.
 
-**Server size.** The default engine runs on the server's CPU and uses about 0.3 GB of disk. Each recognition in
-progress takes about 0.5 GB of memory (one at a time with less than 1.8 GB of memory, two otherwise). 1 vCPU and 1 GB
-is enough for one person, and a sentence takes a few seconds. For a smaller server, use a cloud engine and the
-`slim` image (see [Engines and models](#engines-and-models)).
+### Without Docker or the script
 
-**Next to pocket-relay.** [pocket-relay](https://github.com/ltsqyg-lab/pocket-relay) uses port 8443 and pocket-asr
-8444, so both can run on one server. Open both ports; each prints its own line for the app.
-
-**Without Docker** (Node.js 22 or later; Linux x64 or arm64 with glibc, or macOS):
+Node.js 22 or later; Linux x64 or arm64 with glibc, or macOS:
 
 ```sh
-git clone https://github.com/ltsqyg-lab/pocket-asr /opt/pocket-asr
+git clone https://github.com/pocketcli-app/pocket-asr /opt/pocket-asr
 sudo useradd --system --create-home --home-dir /var/lib/pocket-asr pocket-asr
-sudo -u pocket-asr node /opt/pocket-asr/src/main.mjs       # first start: copy the line, then Ctrl-C
+sudo -u pocket-asr node /opt/pocket-asr/src/main.mjs       # first start: copy the line, then Ctrl-C (ASR_EDITION=cn for mainland China)
 ```
 
 The first start also installs the sherpa-onnx program (about 30 MB) into the data directory. To keep the gateway
@@ -82,7 +125,7 @@ Run the [Operations](#operations) commands as the same user:
 `sudo -u pocket-asr node /opt/pocket-asr/src/main.mjs new-token`. To use another data directory, set
 `ASR_DATA_DIR=/path` for both the service and the commands.
 
-## With a domain
+### With a domain
 
 **Behind a reverse proxy** (the easiest way when you have a domain). Caddy gets and renews the certificate by itself:
 
@@ -116,7 +159,7 @@ Pocket has four ways to turn voice into text, and this gateway handles two of th
 |---|---|
 | Pocket cloud | phone → the official gateway (this code, run by Pocket) → a cloud speech service |
 | My computer | phone → (end-to-end encrypted) → your computer, which uses the same local engines as this repository (`src/engines/local.mjs`) |
-| **My own gateway** | phone → **your** pocket-asr → the engine you configured |
+| **Self-hosted speech service** | phone → **your** pocket-asr → the engine you configured |
 | On this phone | stays on the phone (iOS or Android on-device recognition) |
 
 - Audio and text exist only in memory for one request. Local engines use one temporary file, deleted before the answer.
@@ -195,8 +238,9 @@ node src/cli.mjs check asr.json                                    # validate a 
 node src/cli.mjs transcribe asr.json sample.wav zh                 # one recognition through the configured engines
 ```
 
-Downloads try Pocket's mirror (`https://pocket.pocketcli.net/dl/asr/`) first, then the upstream URL. If neither is
-reachable, use a proxy: `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://<proxy> node src/main.mjs` (Node 22's built-in proxy
+Downloads try Pocket's mirror (`https://pocket.pocketcli.net/dl/asr/`) first, then the upstream URL. The mainland
+China edition (`ASR_EDITION=cn`) downloads only from `https://api.pocketcli.cn/dl/asr/` (the default model and the
+Linux programs). If neither is reachable, use a proxy: `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://<proxy> node src/main.mjs` (Node 22's built-in proxy
 support), or `docker build --build-arg HTTPS_PROXY=http://<proxy> …` for the image.
 
 ## Configuration
@@ -210,7 +254,8 @@ Optional. The file comes from `--config <file>`, else `ASR_CONFIG`, else `/etc/p
 | `ASR_PORT` | `listen.port` | `8444` |
 | `ASR_PUBLIC_URL` | `publicUrl` | asked from the coordination server |
 | `ASR_TLS` | `tls`: `auto`, `self` or `off` | `auto` |
-| `ASR_COORD_URL` | `coordUrl` | `https://pocket.pocketcli.net` |
+| `ASR_EDITION` | `edition`: `intl` or `cn` (mainland China) | `intl` |
+| `ASR_COORD_URL` | `coordUrl` | the edition's: `https://pocket.pocketcli.net` / `https://api.pocketcli.cn` |
 | `ASR_DAY_MINUTES`, `ASR_MONTH_MINUTES` | `limits.dayMinutes`, `limits.monthMinutes` | `120`, `1500` |
 | `ASR_SHERPA_BIN` | the default engine's program | the image's, else installed into the data directory |
 
@@ -220,7 +265,8 @@ Optional. The file comes from `--config <file>`, else `ASR_CONFIG`, else `/etc/p
 | `listen.host`, `listen.port` | `null` (every address), `8444` | |
 | `tls` | `"auto"` | `"auto"`: own certificate, except plain HTTP when listening on loopback only (a proxy on this machine). `"self"`: own certificate. `"off"` / `null`: plain HTTP behind your HTTPS proxy. `{"cert", "key"}`: PEM files. |
 | `publicUrl` | `null` | `https://<host>[:<port>][/<path>]` that phones use; goes into the line. |
-| `coordUrl` | `https://pocket.pocketcli.net` | Where `GET /v2/whoami` is asked. |
+| `edition` | `intl` | `cn`: the mainland China edition (coordination server, download mirror; see [One-command install](#one-command-install-recommended)). Startup fails if `coordUrl` or `auth.ticket` name the other edition's server or key. |
+| `coordUrl` | the edition's | Where `GET /v2/whoami` is asked. |
 | `basePath` | `""` | A prefix such as `/asr` before every path. |
 | `timezone` | `Asia/Shanghai` | Where days and months of speech time start. |
 | `dataDir` | `/var/lib/pocket-asr` (`main.mjs`) | Certificate, token hashes, connection line, models, coordination keys, revocations and speech time used. |
@@ -262,7 +308,8 @@ hashes), so a restart doesn't reset them.
 
 ## Operations
 
-With Docker, put `docker exec pocket-asr` in front of each command.
+After the one-command install, run these as `sudo pocket-asr <command>` (for example `sudo pocket-asr new-token`). With
+Docker, put `docker exec pocket-asr` in front of each command.
 
 ```sh
 node src/main.mjs new-token ["label"]     # another token; prints a complete line (the token only there)
@@ -277,12 +324,13 @@ node src/main.mjs --health                # exit status 0 when the gateway answe
 - The line is also in `<dataDir>/connect.txt`, without the token, which is never stored. `docker logs` keeps the first
   start's line, token included, so anyone who can read this server's logs can read it. If that worries you, revoke it
   and make a new one.
-- Logs: `docker logs pocket-asr` (or `journalctl -u pocket-asr`), one line per request and nothing of what was said.
+- Logs: `journalctl -u pocket-asr` (or `docker logs pocket-asr`), one line per request and nothing of what was said.
 - The certificate lives in `<dataDir>/self-cert.pem` and `self-key.pem` and survives restarts and updates, so the pin
   doesn't change. The gateway only makes a new one when it is broken, close to expiring (it is valid for 10 years) or
   made for another public address. Then you paste the new line into the app; the gateway says so when it starts.
-- Updating: `git pull && docker build -t pocket-asr . && docker rm -f pocket-asr`, then the same `docker run`. The
-  volume keeps the certificate, the tokens and the model, so the app keeps working.
+- Updating: run the install command again; with Docker, rebuild with the new code (`docker compose up -d --build`, or
+  `git pull && docker build -t pocket-asr . && docker rm -f pocket-asr` and the same `docker run`). The certificate,
+  the tokens and the model are kept, so the app keeps working.
 
 ## Development and testing
 

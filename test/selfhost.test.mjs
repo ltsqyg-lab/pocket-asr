@@ -276,7 +276,7 @@ test('banner: the line, App path and firewall note in English and Chinese; token
   const a = banner({ pub: { host: '203.0.113.7', port: 8444, path: '', source: 'whoami' }, tls: t, token: tok, label: 'token-1' })
   assert.equal(a.line, `pocket-asr://203.0.113.7:8444?pin=${t.pin}&token=${tok}`)
   assert.equal(a.bare, `pocket-asr://203.0.113.7:8444?pin=${t.pin}`)
-  for (const s of ['Settings → Voice transcription → My own gateway', '我的 → 语音识别方式 → 自建语音网关', 'TCP port 8444', 'TCP 8444', 'shown only this once', 'new-token']) assert.ok(a.text.includes(s), s)
+  for (const s of ['Settings → Voice transcription → Self-hosted speech service', '我的 → 语音识别方式 → 自建语音服务', 'TCP port 8444', 'TCP 8444', 'shown only this once', 'new-token']) assert.ok(a.text.includes(s), s)
   const b = banner({ pub: { host: '203.0.113.7', port: 8444, path: '', source: 'whoami' }, tls: t })
   assert.ok(!b.text.includes('token='), 'no token, no token parameter')
   assert.match(b.text, /no token: tokens are stored only as hashes/)
@@ -384,7 +384,7 @@ test('node src/main.mjs with no configuration: certificate, first token, line, p
     assert.match(L.pin, /^sha256:[0-9a-f]{64}$/)
     assert.match(L.token, /^[A-Za-z0-9_-]{43}$/)
     assert.equal(coord.hits.filter((h) => h === '/v2/whoami').length, 1)
-    for (const s of ['Settings → Voice transcription → My own gateway', '我的 → 语音识别方式 → 自建语音网关', `TCP port ${port}`]) assert.ok(g.out.includes(s), s)
+    for (const s of ['Settings → Voice transcription → Self-hosted speech service', '我的 → 语音识别方式 → 自建语音服务', `TCP port ${port}`]) assert.ok(g.out.includes(s), s)
     assert.ok(g.out.includes(`pin=${L.pin}`) && /tls=self/.test(g.out))
     // on disk: the certificate the gateway serves, the token's hash only, the line without the token
     assert.equal(pinOf(fs.readFileSync(path.join(data, SELF_CERT), 'utf8')), L.pin)

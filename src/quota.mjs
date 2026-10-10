@@ -125,7 +125,7 @@ export class SpeechTime {
       const retryAfter = Math.max(1, Math.ceil((this.nextBoundary(now, (x) => this.dayKey(x).slice(0, 7), 32 * 86_400_000) - now) / 1000))
       throw new AsrError('quota', 'month', {
         retryAfter,
-        body: { zh: `这个月的语音识别用完了(每月 ${m} 分钟),下个月 1 号恢复`, en: `Speech recognition is used up for this month (${enMinutes(m)} a month). It resets on the 1st.`, retryAfter, quota: u },
+        body: { zh: `本月语音识别时长已用完（每月 ${m} 分钟），下月 1 日恢复`, en: `This month's speech recognition time has been used up (${enMinutes(m)} a month). It resets on the 1st.`, retryAfter, quota: u },
       })
     }
     if (over(u.day)) {
@@ -133,7 +133,7 @@ export class SpeechTime {
       const retryAfter = Math.max(1, Math.ceil((this.nextBoundary(now, (x) => this.dayKey(x), 27 * 3_600_000) - now) / 1000))
       throw new AsrError('quota', 'day', {
         retryAfter,
-        body: { zh: `今天的语音识别用完了(每天 ${m} 分钟),${tz.zh} 0 点恢复`, en: `Speech recognition is used up for today (${enMinutes(m)} a day). It resets at midnight ${tz.en}.`, retryAfter, quota: u },
+        body: { zh: `今日语音识别时长已用完（每天 ${m} 分钟），${tz.zh} 0 点恢复`, en: `Today's speech recognition time has been used up (${enMinutes(m)} a day). It resets at midnight ${tz.en}.`, retryAfter, quota: u },
       })
     }
   }

@@ -18,10 +18,13 @@
 //   ASR_PORT        listen.port  (default 8444)
 //   ASR_PUBLIC_URL  publicUrl    (default: the Pocket coordination server tells us our IP, GET /v2/whoami)
 //   ASR_TLS         tls          auto | self | off
-//   ASR_COORD_URL   coordUrl     (default https://pocket.pocketcli.net)
+//   ASR_EDITION     edition      intl (default) | cn: the mainland China edition asks https://api.pocketcli.cn for its
+//                   address and downloads only from https://api.pocketcli.cn/dl/asr/ (ASR.md §11.5)
+//   ASR_COORD_URL   coordUrl     (default: the edition's, https://pocket.pocketcli.net)
 //   ASR_DAY_MINUTES, ASR_MONTH_MINUTES   limits.dayMinutes / monthMinutes: speech time per caller (default 120 / 1500;
 //                   0 = no cap)
 //   ASR_SHERPA_BIN  the sherpa-onnx-offline program for the default local engine (else the image's, else installed)
+//   ASR_COMMAND     how to run these commands on this machine, shown in the output (e.g. "sudo pocket-asr")
 //
 // License: AGPL-3.0-only.
 
@@ -102,6 +105,7 @@ export function rawConfig(file, env) {
     raw.tls = env.ASR_TLS
   }
   if (env.ASR_COORD_URL) raw.coordUrl = env.ASR_COORD_URL
+  if (env.ASR_EDITION) raw.edition = env.ASR_EDITION
   for (const [name, key] of [['ASR_DAY_MINUTES', 'dayMinutes'], ['ASR_MONTH_MINUTES', 'monthMinutes']]) {
     if (env[name] === undefined || env[name] === '') continue
     const n = Number(env[name])
@@ -144,18 +148,18 @@ export function prebuiltProblem({ platform = process.platform, key = platformKey
  * No engine configured: local recognition with sherpa-onnx + SenseVoice (zh / en / auto). The program is the image's
  * (or ASR_SHERPA_BIN), else installed into <dataDir>/sherpa-onnx; the model goes to <dataDir>/models/sense-voice-int8.
  */
-export async function defaultEngine(dataDir, { env = process.env, log = () => {}, installs = { installEngine, installModel } } = {}) {
+export async function defaultEngine(dataDir, { env = process.env, log = () => {}, installs = { installEngine, installModel }, edition = null } = {}) {
   let bin = env.ASR_SHERPA_BIN || (fs.existsSync(IMAGE_SHERPA) ? IMAGE_SHERPA : null)
   if (!bin) {
     const why = prebuiltProblem()
     if (why) throw new Error(`no engine is configured, and the default local engine cannot run here (${why}): configure an engine (README → Engines and models)`)
     const dir = path.join(dataDir, 'sherpa-onnx')
     if (!fs.existsSync(dir)) log('installing the speech engine program sherpa-onnx (first start only)')
-    bin = await installs.installEngine('sherpa-onnx', dir, { log, onProgress: progressLogger(log) })
+    bin = await installs.installEngine('sherpa-onnx', dir, { log, edition, onProgress: progressLogger(log) })
   }
   const model = path.join(dataDir, 'models', DEFAULT_MODEL)
   if (!fs.existsSync(model)) log(`installing the speech model ${DEFAULT_MODEL}, about 160 MB (first start only)`)
-  await installs.installModel(DEFAULT_MODEL, model, { log, onProgress: progressLogger(log) })
+  await installs.installModel(DEFAULT_MODEL, model, { log, edition, onProgress: progressLogger(log) })
   const cores = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length
   return { id: 'local', type: 'sherpa-onnx', bin, model, threads: Math.max(1, Math.min(4, cores)) }
 }
@@ -177,7 +181,7 @@ async function start(o, env, io) {
   ensureDataDir(cfg.dataDir)
   if (!cfg.engines.length) {
     log('no engine configured: local recognition with sherpa-onnx + SenseVoice (Chinese and English)')
-    raw.engines = [await defaultEngine(cfg.dataDir, { env, log })]
+    raw.engines = [await defaultEngine(cfg.dataDir, { env, log, edition: cfg.edition })]
     raw.default = {}
     // every recognition runs one engine process holding the model (about 0.5 GB): one at a time on a 1 GB server
     if (raw.limits?.concurrent === undefined) raw.limits = { ...(raw.limits || {}), concurrent: memoryBytes() < 1.8 * 2 ** 30 ? 1 : 2 }
@@ -203,11 +207,11 @@ async function start(o, env, io) {
 
   const engines = [...gw.engines.values()].map((e) => `${e.id}(${e.type}:${e.langs.join('/')})`).join(' ')
   const where = addr.address.includes(':') ? `[${addr.address}]` : addr.address
-  io.out(`${stamp()} pocket-asr ${VERSION} gw=${cfg.gatewayId} listening ${mode === 'off' ? 'http' : 'https'}://${where}:${addr.port} auth=${gw.auth.methods.join('+') || '-'} engines=${engines}${tls.pin ? ` tls=${mode} pin=${tls.pin}` : ''}`)
+  io.out(`${stamp()} pocket-asr ${VERSION} edition=${cfg.edition} gw=${cfg.gatewayId} listening ${mode === 'off' ? 'http' : 'https'}://${where}:${addr.port} auth=${gw.auth.methods.join('+') || '-'} engines=${engines}${tls.pin ? ` tls=${mode} pin=${tls.pin}` : ''}`)
   if (mode === 'off' && !cfg.listen.host) log('note: plain HTTP on every address — only behind your own HTTPS reverse proxy')
   if (showLine) {
     if (pub.source !== 'config' && cfg.listen.port === 0) pub.port = addr.port
-    const b = banner({ pub, tls, token: made?.token, label: made?.label, docker: inDocker() })
+    const b = banner({ pub, tls, token: made?.token, label: made?.label, docker: inDocker(), edition: cfg.edition, cmd: env.ASR_COMMAND || undefined })
     io.out(b.text)
     try { writeConnectFile(cfg.dataDir, b.bare) } catch (e) { log(`could not write connect.txt (${e.code || e.message})`) }
   }
@@ -237,15 +241,15 @@ async function newToken(o, env, io) {
   if (o.args.length > 1) throw new UsageError('new-token takes one label (put it in quotes if it has spaces)')
   const { cfg, pub, tls } = await lineParts(o, env, io)
   const made = addToken(cfg.dataDir, { label: o.args[0], reserved: cfg.auth.tokens.map((t) => t.label) })
-  io.out(banner({ pub, tls, token: made.token, label: made.label, docker: inDocker() }).text)
+  io.out(banner({ pub, tls, token: made.token, label: made.label, docker: inDocker(), edition: cfg.edition, cmd: env.ASR_COMMAND || undefined }).text)
   io.out('A running gateway accepts the new token within a second (no restart).')
   io.out('正在运行的网关一秒内就认这个新令牌,不用重启。')
   return 0
 }
 
 async function connectString(o, env, io) {
-  const { pub, tls } = await lineParts(o, env, io)
-  io.out(banner({ pub, tls, docker: inDocker() }).text)
+  const { cfg, pub, tls } = await lineParts(o, env, io)
+  io.out(banner({ pub, tls, docker: inDocker(), edition: cfg.edition, cmd: env.ASR_COMMAND || undefined }).text)
   return 0
 }
 

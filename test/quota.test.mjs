@@ -48,8 +48,8 @@ test('a ticket\'s asrQuota caps the account per day: 429 with Retry-After to mid
     assert.equal(r.json.code, 'quota')
     assert.equal(r.headers.get('retry-after'), String(14 * 3600))
     assert.equal(r.json.retryAfter, 14 * 3600)
-    assert.equal(r.json.zh, '今天的语音识别用完了(每天 1 分钟),北京时间 0 点恢复')
-    assert.equal(r.json.en, 'Speech recognition is used up for today (1 minute a day). It resets at midnight Beijing time.')
+    assert.equal(r.json.zh, '今日语音识别时长已用完（每天 1 分钟），北京时间 0 点恢复')
+    assert.equal(r.json.en, "Today's speech recognition time has been used up (1 minute a day). It resets at midnight Beijing time.")
     assert.deepEqual(r.json.quota, { day: { used: 60, cap: 60 }, month: { used: 60, cap: 180 } })
     assert.equal(fake.calls.length, 2, 'the refused request never reached the engine')
     assert.match(g.lines.at(-1), /caller=acct:u_quota01 engine=- sec=0\.00 chars=0 ms=\d+ code=quota detail=day/, 'refused before the audio was read')
@@ -67,8 +67,8 @@ test('a ticket\'s asrQuota caps the account per day: 429 with Retry-After to mid
     // 3 minutes this month: refused until the 1st of November in Beijing, whatever the day says
     const m = await send(dev, clip, quota)
     assert.equal(m.status, 429)
-    assert.equal(m.json.zh, '这个月的语音识别用完了(每月 3 分钟),下个月 1 号恢复')
-    assert.equal(m.json.en, 'Speech recognition is used up for this month (3 minutes a month). It resets on the 1st.')
+    assert.equal(m.json.zh, '本月语音识别时长已用完（每月 3 分钟），下月 1 日恢复')
+    assert.equal(m.json.en, "This month's speech recognition time has been used up (3 minutes a month). It resets on the 1st.")
     const toNov = (Date.UTC(2026, 9, 31, 16, 0, 0) - clock.t) / 1000
     assert.equal(Number(m.headers.get('retry-after')), toNov)
     clock.t = T0 + 3 * DAY

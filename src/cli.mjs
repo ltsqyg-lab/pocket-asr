@@ -10,7 +10,8 @@
 //   node src/cli.mjs install-engine <engine> <dir>    download + verify + unpack an engine program for this platform
 //   node src/cli.mjs transcribe <config.json> <file.wav> [lang] [engine]   one recognition through the configured engines
 //
-// Add --allow-unverified to install a file that has no pinned SHA-256 (not recommended).
+// Add --allow-unverified to install a file that has no pinned SHA-256 (not recommended). ASR_EDITION=cn downloads only
+// from the mainland China mirror (models.json `editions`).
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -58,13 +59,13 @@ async function main() {
   }
   if (cmd === 'install-model') {
     if (args.length < 2) throw new Error('usage: install-model <id> <target>')
-    const p = await installModel(args[0], args[1], { log: out, allowUnverified: flags.has('--allow-unverified') })
+    const p = await installModel(args[0], args[1], { log: out, allowUnverified: flags.has('--allow-unverified'), edition: process.env.ASR_EDITION || null })
     out(p)
     return
   }
   if (cmd === 'install-engine') {
     if (args.length < 2) throw new Error('usage: install-engine <engine> <dir>')
-    const bin = await installEngine(args[0], args[1], { log: out, allowUnverified: flags.has('--allow-unverified') })
+    const bin = await installEngine(args[0], args[1], { log: out, allowUnverified: flags.has('--allow-unverified'), edition: process.env.ASR_EDITION || null })
     out(bin)
     return
   }

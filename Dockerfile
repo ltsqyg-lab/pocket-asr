@@ -12,6 +12,8 @@
 # only writable place is /var/lib/pocket-asr (certificate, token hashes, model, coordination keys).
 
 FROM node:22-alpine AS slim
+ARG ASR_EDITION=intl
+ENV ASR_EDITION=${ASR_EDITION}
 WORKDIR /app
 COPY package.json models.json LICENSE LICENSE-MIT README.md ./
 COPY src/ src/
@@ -25,14 +27,22 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD ["node", "src/mai
 CMD ["node", "src/main.mjs"]
 
 FROM node:22-bookworm-slim AS local
-# bzip2 for the .tar.bz2 archives, ca-certificates for HTTPS downloads
-RUN apt-get update && apt-get install -y --no-install-recommends bzip2 ca-certificates && rm -rf /var/lib/apt/lists/*
+# bzip2 for the .tar.bz2 archives, ca-certificates for HTTPS downloads.
+# APT_MIRROR (e.g. mirrors.aliyun.com) replaces deb.debian.org, for building in mainland China. It must serve plain
+# HTTP: this image has no CA certificates yet (mirrors.tencent.com redirects to HTTPS and fails here).
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then sed -i "s#deb.debian.org#$APT_MIRROR#g" /etc/apt/sources.list.d/debian.sources; fi \
+ && apt-get update && apt-get install -y --no-install-recommends bzip2 ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json models.json LICENSE LICENSE-MIT README.md ./
 COPY src/ src/
 COPY scripts/ scripts/
 # The engine program for this image's architecture (linux-x64 / linux-arm64), checked against models.json.
 # Behind a proxy: docker build --build-arg HTTPS_PROXY=http://<proxy> -t pocket-asr .
+# Mainland China edition (downloads only from https://api.pocketcli.cn/dl/asr/, here and on first start):
+#   docker build --build-arg ASR_EDITION=cn -t pocket-asr .
+ARG ASR_EDITION=intl
+ENV ASR_EDITION=${ASR_EDITION}
 RUN NODE_USE_ENV_PROXY=1 node src/cli.mjs install-engine sherpa-onnx /opt/sherpa \
  && mkdir -p /var/lib/pocket-asr && chown node:node /var/lib/pocket-asr
 USER node
